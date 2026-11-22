@@ -42,7 +42,10 @@ export function verifySessionToken(token: string | undefined | null): boolean {
   return safeEqual(token, expected);
 }
 
-export function isRequestAuthorized(request: NextRequest): boolean {
+export function isRequestAuthorized(
+  request: NextRequest,
+  options?: { allowQueryPassword?: boolean }
+): boolean {
   if (!isAccessPasswordEnabled()) return true;
 
   // 1. Check 30-day HttpOnly session cookie
@@ -61,6 +64,15 @@ export function isRequestAuthorized(request: NextRequest): boolean {
   if (authHeader?.toLowerCase().startsWith('bearer ')) {
     const bearer = authHeader.slice(7).trim();
     if (verifyPlainPassword(bearer) || verifySessionToken(bearer)) {
+      return true;
+    }
+  }
+
+  // 3. Optional query param auth (?pwd=...) for direct browser maintenance triggers
+  if (options?.allowQueryPassword) {
+    const queryPassword =
+      request.nextUrl.searchParams.get('pwd') ?? request.nextUrl.searchParams.get('password');
+    if (queryPassword && verifyPlainPassword(queryPassword)) {
       return true;
     }
   }

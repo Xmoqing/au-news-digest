@@ -16,41 +16,41 @@
 }
 
 :root {
-  /* Raw light & dark color tokens */
-  --color-canvas-light: #f6f8fa;
-  --color-canvas-dark: #090c10;
+  /* Apple Native Light & Dark Color Tokens (macOS / iOS / Apple News) */
+  --color-canvas-light: #F5F5F7;
+  --color-canvas-dark: #000000;
 
-  --color-surface-light: #ffffff;
-  --color-surface-dark: #10151c;
+  --color-surface-light: #FFFFFF;
+  --color-surface-dark: #1C1C1E;
 
-  --color-surface-elevated-light: #f0f9f8;
-  --color-surface-elevated-dark: #15212b;
+  --color-surface-elevated-light: #F2F2F7;
+  --color-surface-elevated-dark: #2C2C2E;
 
-  --color-surface-subtle-light: #eef2f6;
-  --color-surface-subtle-dark: #171e28;
+  --color-surface-subtle-light: #E5E5EA;
+  --color-surface-subtle-dark: #1C1C1E;
 
-  --color-ink-light: #0f172a;
-  --color-ink-dark: #f1f5f9;
+  --color-ink-light: #1D1D1F;
+  --color-ink-dark: #F5F5F7;
 
-  --color-ink-secondary-light: #334155;
-  --color-ink-secondary-dark: #cbd5e1;
+  --color-ink-secondary-light: #3A3A3C;
+  --color-ink-secondary-dark: #D1D1D6;
 
-  --color-ink-muted-light: #64748b;
-  --color-ink-muted-dark: #94a3b8;
+  --color-ink-muted-light: #86868B;
+  --color-ink-muted-dark: #86868B;
 
-  --color-border-light: #e2e8f0;
-  --color-border-dark: #1e293b;
+  --color-border-light: rgba(0, 0, 0, 0.08);
+  --color-border-dark: rgba(255, 255, 255, 0.08);
 
-  --color-accent-light: #0f766e;
-  --color-accent-dark: #2dd4bf;
+  --color-accent-light: #007AFF;
+  --color-accent-dark: #0A84FF;
 
-  --color-accent-soft-light: rgba(15, 118, 110, 0.1);
-  --color-accent-soft-dark: rgba(45, 212, 191, 0.14);
+  --color-accent-soft-light: rgba(0, 122, 255, 0.12);
+  --color-accent-soft-dark: rgba(10, 132, 255, 0.18);
 
   --color-scrollbar-track-light: transparent;
   --color-scrollbar-track-dark: transparent;
-  --color-scrollbar-thumb-light: #94a3b8;
-  --color-scrollbar-thumb-dark: #475569;
+  --color-scrollbar-thumb-light: rgba(0, 0, 0, 0.22);
+  --color-scrollbar-thumb-dark: rgba(255, 255, 255, 0.22);
 
   /* Elder-friendly reading scale multiplier (kept off html font-size so <meta name="text-scale"> works natively) */
   --reader-scale: 1;
@@ -122,6 +122,7 @@
 
 html,
 body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   background-color: var(--color-canvas);
   color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
@@ -229,9 +230,9 @@ body {
   color: var(--color-ink);
 }
 
-/* Selected indicator driven directly by aria-selected (border shape survives forced-colors without cluttering the glowing capsule) */
+/* Selected indicator driven directly by aria-selected (clean Apple Segmented Control legibility) */
 .category-tab[aria-selected="true"] {
-  color: var(--color-accent);
+  color: var(--color-ink);
 }
 
 @media (forced-colors: active) {
@@ -244,25 +245,26 @@ body {
   }
 }
 
-/* Scalable relative typography for elder-friendly reading (unitless line-heights + rem units) */
+/* Scalable relative typography for elder-friendly Apple editorial reading */
 .card-title-scaled {
-  font-size: calc(0.96rem * var(--reader-scale));
-  line-height: 1.42;
+  font-size: calc(0.97rem * var(--reader-scale));
+  line-height: 1.4;
+  letter-spacing: -0.015em;
 }
 
 .card-summary-scaled {
   font-size: calc(0.83rem * var(--reader-scale));
-  line-height: 1.58;
+  line-height: 1.56;
 }
 
 .article-headline {
-  font-size: calc(clamp(1.3rem, 1.05rem + 0.9vw, 1.85rem) * var(--reader-scale));
-  line-height: 1.35;
-  letter-spacing: -0.015em;
+  font-size: calc(clamp(1.35rem, 1.08rem + 0.9vw, 1.9rem) * var(--reader-scale));
+  line-height: 1.32;
+  letter-spacing: -0.022em;
 }
 
 .article-summary-scaled {
-  font-size: calc(0.95rem * var(--reader-scale));
+  font-size: calc(0.96rem * var(--reader-scale));
   line-height: 1.7;
 }
 
@@ -272,72 +274,8 @@ body {
 }
 
 .article-body-scaled {
-  font-size: calc(1.02rem * var(--reader-scale));
-  line-height: 1.9;
-}
-
-/* Ambient top radial glow: clearly visible emerald -> deep indigo aura in Dark Mode */
-.ambient-top-glow {
-  background:
-    radial-gradient(65% 110% at 15% -15%, rgba(16, 185, 129, 0.08), transparent 68%),
-    radial-gradient(58% 105% at 85% -20%, rgba(59, 130, 246, 0.07), transparent 68%);
-}
-
-@media (prefers-color-scheme: dark) {
-  .ambient-top-glow {
-    background:
-      radial-gradient(62% 115% at 18% -10%, rgba(16, 185, 129, 0.17), transparent 66%),
-      radial-gradient(58% 110% at 82% -15%, rgba(59, 130, 246, 0.10), transparent 68%),
-      radial-gradient(45% 80% at 50% -18%, rgba(20, 184, 166, 0.11), transparent 70%);
-  }
-}
-
-/* Luminous flowing emerald -> cyan -> indigo/violet border for AI Core Summary card */
-@keyframes ai-border-flow {
-  0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0% 50%;
-  }
-}
-
-.ai-summary-glow-frame {
-  background: linear-gradient(
-    125deg,
-    rgba(16, 185, 129, 0.55),
-    rgba(45, 212, 191, 0.35),
-    rgba(99, 102, 241, 0.45),
-    rgba(139, 92, 246, 0.4),
-    rgba(16, 185, 129, 0.55)
-  );
-  background-size: 260% 260%;
-}
-
-@media (prefers-color-scheme: dark) {
-  .ai-summary-glow-frame {
-    background: linear-gradient(
-      125deg,
-      rgba(52, 211, 153, 0.65),
-      rgba(34, 211, 238, 0.42),
-      rgba(99, 102, 241, 0.55),
-      rgba(168, 85, 247, 0.48),
-      rgba(52, 211, 153, 0.65)
-    );
-    background-size: 260% 260%;
-    box-shadow:
-      0 0 28px rgba(16, 185, 129, 0.13),
-      0 10px 30px rgba(0, 0, 0, 0.35);
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .ai-summary-glow-frame {
-    animation: ai-border-flow 7s ease-in-out infinite;
-  }
+  font-size: calc(1.03rem * var(--reader-scale));
+  line-height: 1.75;
 }
 
 /* Mobile slide-over drill-down transition gated on prefers-reduced-motion */

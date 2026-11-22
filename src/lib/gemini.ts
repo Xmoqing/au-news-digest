@@ -35,6 +35,39 @@ const FALLBACK_MODELS = [
   'gemini-flash-latest',
 ];
 
+const RECLASSIFY_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-flash-lite-latest',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-flash-latest',
+];
+
+const RECLASSIFY_BATCH_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    classifications: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          id: {
+            type: Type.INTEGER,
+            description: '对应输入文章的整数 id',
+          },
+          category: {
+            type: Type.STRING,
+            enum: ['澳洲要闻', '国际热点', '财经市场', '科技前沿', '社会生活'],
+            description: '按最新严格规则判定后的新分类名称',
+          },
+        },
+        required: ['id', 'category'],
+      },
+    },
+  },
+  required: ['classifications'],
+};
+
 const VALID_CATEGORIES = new Set<string>(NEWS_CATEGORIES);
 
 const CATEGORY_ENUM: NewsCategory[] = ['澳洲要闻', '国际热点', '财经市场', '科技前沿', '社会生活'];
@@ -291,9 +324,11 @@ async function generateWithFallback(
   client: GoogleGenAI,
   contents: string,
   responseSchema: Schema,
-  exhaustedModels: Set<string>
+  exhaustedModels: Set<string>,
+  options?: { modelChain?: string[]; temperature?: number }
 ): Promise<{ text: string; model: string }> {
-  const models = getModelChain().filter((m) => !exhaustedModels.has(m));
+  const chain = options?.modelChain ?? getModelChain();
+  const models = chain.filter((m) => !exhaustedModels.has(m));
   if (models.length === 0) {
     throw new Error('所有可用 Gemini 模型的当日免费额度均已耗尽，请稍后或明日再试。');
   }
@@ -307,7 +342,7 @@ async function generateWithFallback(
         config: {
           responseMimeType: 'application/json',
           responseSchema,
-          temperature: 0.25,
+          temperature: options?.temperature ?? 0.25,
         },
       });
 
@@ -550,4 +585,94 @@ export async function translateAndSummarizeArticle(
     console.error(`[Gemini] Translation failed for "${input.original_title}":`, errMsg.slice(0, 260));
     return buildFallbackOutput(input, errMsg);
   }
+}
+
+export interface ReclassifyBatchItemInput {
+  id: number;
+  source_name: string;
+  zh_title: string;
+}
+
+export interface ReclassifyBatchOutput {
+  mapping: Record<number, NewsCategory>;
+  modelUsed: string;
+}
+
+/**
+ * Reclassify a batch of historical articles (up to 50 per call) using ONLY id, source, and zh_title.
+ * Tries gemini-3.8-flash first, with automatic fallback to high-quota Flash-Lite models if rate-limited.
+ */
+export async function reclassifyArticlesBatch(
+  articles: ReclassifyBatchItemInput[],
+  exhaustedModels: Set<string> = new Set()
+): Promise<ReclassifyBatchOutput> {
+  if (articles.length === 0) {
+    return { mapping: {}, modelUsed: 'none' };
+  }
+
+  const client = getClient();
+  if (!client) {
+    throw new Error('未配置有效的 GEMINI_API_KEY，无法执行历史分类校准。');
+  }
+
+  const validIds = new Set(articles.map((a) => a.id));
+  const payloadLines = articles
+    .map((a) => JSON.stringify({ id: a.id, source: a.source_name, zh_title: a.zh_title }))
+    .join('\n');
+
+  const prompt = [
+    '你是一位资深金融与国际新闻分类主编，现在需要对历史新闻库中的文章按最新【严格分类标准】重新归类。',
+    `下方共有 ${articles.length} 篇文章（每行包含 id、source 媒体来源、zh_title 中文标题）。请逐篇独立重新判定最准确的一个分类，不得遗漏任何一篇 id。`,
+    '',
+    '【五个固定分类及严格边界定义】',
+    '1. 财经市场（**纯正的股市证券与交易市场频道，严格把关**）：',
+    '   - ✅ 仅限直接涉及以下内容的新闻：',
+    '     ① 股票市场与大盘指数（美股标普/纳指/道指、澳股 ASX、亚太/欧股涨跌、IPO 上市、上市公司并购重组）；',
+    '     ② 上市公司财报、股价异动、华尔街/投行目标价与评级调整、基金/ETF 资金流向；',
+    '     ③ 央行货币政策与宏观金融市场（美联储 Fed、澳洲联储 RBA 利率决议、通胀 CPI、国债收益率）；',
+    '     ④ 外汇汇率（AUD/USD/CNY 等）与大宗商品交易（黄金、原油、铁矿石、锂矿、铜等期货/现货价格走势）。',
+    '   - ❌ **必须坚决排除出「财经市场」**（严禁归入财经市场）：',
+    '     • 普通消费者零售纠纷、超市开店/选址诉讼、商场促销、普通企业劳资/行政/监管罚单（澳洲本土归「澳洲要闻」，海外归「国际热点」或「社会生活」）；',
+    '     • 个人/家庭理财情感建议、退休夫妻开支故事、买房/租房生活体验（归「社会生活」）；',
+    '     • 普通机构或政府部门被黑客攻击、数据泄露、网络犯罪（科技/网络安全归「科技前沿」，政法事件归「国际热点」或「澳洲要闻」）。',
+    '2. 科技前沿：AI 人工智能、大模型、芯片半导体、互联网大厂技术与产品、创业与科技创投、航天科学、新能源汽车技术、网络安全与黑客攻击事件。',
+    '3. 澳洲要闻：澳洲联邦与各州政经政策、悉尼/墨尔本等澳洲本地重大新闻、澳洲本土司法诉讼与非证券类商业/民生事件。',
+    '4. 国际热点：全球地缘政治、外交、战争冲突、欧美亚太各国政局与重大海外突发事件。',
+    '5. 社会生活：医疗健康、文体赛事、消费与零售生活、个人理财/退休家庭故事、教育、旅游美食、气候天气与社会百态。',
+    '',
+    '【待重新分类的历史文章列表】',
+    payloadLines,
+  ].join('\n');
+
+  const { text, model } = await generateWithFallback(
+    client,
+    prompt,
+    RECLASSIFY_BATCH_SCHEMA,
+    exhaustedModels,
+    {
+      modelChain: RECLASSIFY_MODELS,
+      temperature: 0.1,
+    }
+  );
+
+  const parsed = JSON.parse(text) as {
+    classifications?: Array<{ id?: number; category?: string }>;
+  };
+
+  const mapping: Record<number, NewsCategory> = {};
+  for (const row of parsed.classifications ?? []) {
+    if (
+      typeof row?.id === 'number' &&
+      validIds.has(row.id) &&
+      typeof row.category === 'string' &&
+      VALID_CATEGORIES.has(row.category)
+    ) {
+      mapping[row.id] = row.category as NewsCategory;
+    }
+  }
+
+  console.log(
+    `[Gemini] Reclassified batch of ${articles.length} articles (matched ${Object.keys(mapping).length}) via ${model}`
+  );
+  return { mapping, modelUsed: model };
 }

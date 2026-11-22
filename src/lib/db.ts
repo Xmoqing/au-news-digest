@@ -567,6 +567,67 @@ export async function getTotalArticleCount(): Promise<number> {
   return Number(rows[0]?.count ?? 0);
 }
 
+export interface ArticleForReclassify {
+  id: number;
+  source_id: string;
+  source_name: string;
+  zh_title: string;
+  category: NewsCategory;
+}
+
+export async function getAllArticlesForReclassify(): Promise<ArticleForReclassify[]> {
+  const db = await getDb();
+  const rows = selectAll(
+    db,
+    `SELECT id, source_id, source_name, zh_title, category
+     FROM articles
+     ORDER BY id ASC`
+  );
+  return rows.map((row) => ({
+    id: Number(row.id),
+    source_id: String(row.source_id),
+    source_name: String(row.source_name),
+    zh_title: String(row.zh_title),
+    category: normalizeCategory(String(row.category), String(row.source_id)),
+  }));
+}
+
+/**
+ * Lossless batch category update: ONLY modifies `category` column,
+ * preserving all historical rows, titles, summaries, key points, and translations.
+ */
+export async function batchUpdateArticleCategories(
+  updates: Array<{ id: number; category: NewsCategory }>
+): Promise<number> {
+  const validUpdates = updates.filter(
+    (u) => Number.isInteger(u.id) && u.id > 0 && VALID_CATEGORY_SET.has(u.category)
+  );
+  if (validUpdates.length === 0) return 0;
+
+  const db = await getDb();
+  let applied = 0;
+
+  db.run('BEGIN TRANSACTION');
+  try {
+    const stmt = db.prepare(`UPDATE articles SET category = ? WHERE id = ?`);
+    try {
+      for (const item of validUpdates) {
+        stmt.run([item.category, item.id]);
+        applied += 1;
+      }
+    } finally {
+      stmt.free();
+    }
+    db.run('COMMIT');
+  } catch (err) {
+    db.run('ROLLBACK');
+    throw err;
+  }
+
+  persistDatabase(db, resolveDatabasePath());
+  return applied;
+}
+
 export async function pruneOldArticles(keepLatest = 1000): Promise<number> {
   const db = await getDb();
   const countBefore = await getTotalArticleCount();

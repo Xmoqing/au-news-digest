@@ -156,14 +156,14 @@ export function FxConverterBadge({
         type="button"
         popoverTarget={popoverId}
         aria-label={`当前汇率 1 澳元约等于 ${fxRate.rate.toFixed(4)} 人民币，点击打开双向换算工具`}
-        className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-slate-200/70 bg-white/85 px-2.5 py-1 text-xs font-medium text-slate-900 shadow-[0_2px_10px_rgba(15,23,42,0.04)] backdrop-blur-md transition-all duration-200 hover:border-emerald-500/40 hover:bg-white active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent dark:border-white/10 dark:border-t-white/20 dark:bg-gradient-to-r dark:from-emerald-500/15 dark:via-teal-500/10 dark:to-zinc-900/80 dark:text-zinc-100 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_4px_16px_rgba(16,185,129,0.12)] dark:hover:border-emerald-400/35 dark:hover:from-emerald-500/25 dark:hover:to-zinc-800/85 tabular-nums"
+        className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-3 py-1 text-xs font-medium text-[#1D1D1F] transition-colors hover:bg-[#F2F2F7] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] dark:border-white/[0.10] dark:bg-[#1C1C1E] dark:text-[#F5F5F7] dark:hover:bg-[#2C2C2E] tabular-nums"
       >
         <span aria-hidden="true">🇦🇺</span>
         <span className="whitespace-nowrap">
-          1 AUD ≈ <strong className="font-bold text-emerald-700 dark:text-emerald-300">¥{fxRate.rate.toFixed(4)}</strong>{' '}
-          <span className="hidden xs:inline sm:inline">CNY</span>
+          1 AUD ≈ <strong className="font-semibold text-[#007AFF] dark:text-[#0A84FF]">¥{fxRate.rate.toFixed(4)}</strong>{' '}
+          <span className="hidden xs:inline sm:inline text-[#86868B]">CNY</span>
         </span>
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500 dark:text-zinc-400" aria-hidden="true" />
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#86868B]" aria-hidden="true" />
       </button>
 
       {/* Native Popover API ("auto" supports light-dismiss on outside click & Esc key) */}
@@ -171,12 +171,12 @@ export function FxConverterBadge({
         ref={popoverRef}
         id={popoverId}
         popover="auto"
-        className="fx-converter-popover w-[min(20.5rem,calc(100vw-1.5rem))] rounded-2xl border border-white/10 border-t-white/20 bg-zinc-900/95 p-4 text-zinc-100 shadow-[0_24px_60px_rgba(0,0,0,0.65),0_0_24px_rgba(16,185,129,0.12)] backdrop-blur-xl"
+        className="fx-converter-popover w-[min(20.5rem,calc(100vw-1.5rem))] rounded-2xl border border-white/[0.12] bg-[#1C1C1E]/95 p-4 text-[#F5F5F7] shadow-[0_24px_60px_rgba(0,0,0,0.65)] backdrop-blur-2xl saturate-150"
       >
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
-            <ArrowLeftRight className="h-4 w-4 text-emerald-300" aria-hidden="true" />
-            <span className="text-sm font-bold text-zinc-100">澳元 ⇄ 人民币换算</span>
+            <ArrowLeftRight className="h-4 w-4 text-[#0A84FF]" aria-hidden="true" />
+            <span className="text-sm font-semibold tracking-tight text-[#F5F5F7]">澳元 ⇄ 人民币换算</span>
           </div>
           <div className="flex items-center gap-1">
             <button
@@ -185,10 +185,10 @@ export function FxConverterBadge({
               disabled={refreshing}
               aria-label="立即刷新汇率"
               title="立即刷新最新汇率"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition-all hover:bg-zinc-800 hover:text-emerald-300 active:scale-[0.96] disabled:opacity-50"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#86868B] transition-colors hover:bg-white/[0.10] hover:text-[#F5F5F7] active:scale-[0.96] disabled:opacity-50"
             >
               <RefreshCw
-                className={['h-3.5 w-3.5', refreshing ? 'animate-spin text-emerald-300' : ''].join(' ')}
+                className={['h-3.5 w-3.5', refreshing ? 'animate-spin text-[#0A84FF]' : ''].join(' ')}
                 aria-hidden="true"
               />
             </button>
@@ -196,7 +196,7 @@ export function FxConverterBadge({
               type="button"
               onClick={() => void handleClosePopover()}
               aria-label="关闭汇率换算窗口"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition-all hover:bg-zinc-800 hover:text-zinc-100 active:scale-[0.96]"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#86868B] transition-colors hover:bg-white/[0.10] hover:text-[#F5F5F7] active:scale-[0.96]"
             >
               <X className="h-4 w-4" aria-hidden="true" />
             </button>
@@ -204,12 +204,12 @@ export function FxConverterBadge({
         </div>
 
         {/* Live rate summary strip */}
-        <div className="mb-3.5 rounded-xl border border-white/10 bg-zinc-800/75 px-3 py-2 text-xs tabular-nums">
-          <div className="flex items-center justify-between text-zinc-100">
+        <div className="mb-3.5 rounded-xl bg-[#2C2C2E] px-3.5 py-2.5 text-xs tabular-nums">
+          <div className="flex items-center justify-between text-[#F5F5F7]">
             <span>1 澳元 (AUD)</span>
-            <strong className="text-sm font-bold text-emerald-300">¥{fxRate.rate.toFixed(4)} CNY</strong>
+            <strong className="text-sm font-semibold text-[#0A84FF]">¥{fxRate.rate.toFixed(4)} CNY</strong>
           </div>
-          <div className="mt-0.5 flex items-center justify-between text-[11px] text-zinc-400">
+          <div className="mt-0.5 flex items-center justify-between text-[11px] text-[#86868B]">
             <span>1 人民币 (CNY)</span>
             <span>A${fxRate.inverseRate.toFixed(4)} AUD</span>
           </div>
@@ -220,14 +220,14 @@ export function FxConverterBadge({
           <div>
             <label
               htmlFor={`${popoverId}-aud`}
-              className="mb-1 block text-xs font-medium text-zinc-300"
+              className="mb-1 block text-xs font-medium text-[#AEAEB2]"
             >
               澳元 (AUD)
             </label>
             <div className="relative">
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-zinc-400"
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-[#86868B]"
               >
                 A$
               </span>
@@ -238,7 +238,7 @@ export function FxConverterBadge({
                 value={audValue}
                 onChange={(e) => handleAudChange(e.target.value)}
                 placeholder="输入澳元金额"
-                className="min-h-11 w-full rounded-xl border border-white/10 bg-zinc-950/80 pl-9 pr-3 text-base font-semibold text-zinc-100 placeholder:text-zinc-500 tabular-nums transition-colors focus:border-emerald-400/60 focus:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
+                className="min-h-11 w-full rounded-xl border border-white/[0.10] bg-[#000000]/70 pl-9 pr-3 text-base font-semibold text-[#F5F5F7] placeholder:text-[#86868B] tabular-nums transition-colors focus:border-[#0A84FF] focus:bg-[#000000] focus:outline-none focus:ring-2 focus:ring-[#0A84FF]/25"
               />
             </div>
           </div>
@@ -246,14 +246,14 @@ export function FxConverterBadge({
           <div>
             <label
               htmlFor={`${popoverId}-cny`}
-              className="mb-1 block text-xs font-medium text-zinc-300"
+              className="mb-1 block text-xs font-medium text-[#AEAEB2]"
             >
               人民币 (CNY)
             </label>
             <div className="relative">
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-zinc-400"
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-[#86868B]"
               >
                 ¥
               </span>
@@ -264,7 +264,7 @@ export function FxConverterBadge({
                 value={cnyValue}
                 onChange={(e) => handleCnyChange(e.target.value)}
                 placeholder="输入人民币金额"
-                className="min-h-11 w-full rounded-xl border border-white/10 bg-zinc-950/80 pl-9 pr-3 text-base font-semibold text-zinc-100 placeholder:text-zinc-500 tabular-nums transition-colors focus:border-emerald-400/60 focus:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
+                className="min-h-11 w-full rounded-xl border border-white/[0.10] bg-[#000000]/70 pl-9 pr-3 text-base font-semibold text-[#F5F5F7] placeholder:text-[#86868B] tabular-nums transition-colors focus:border-[#0A84FF] focus:bg-[#000000] focus:outline-none focus:ring-2 focus:ring-[#0A84FF]/25"
               />
             </div>
           </div>
@@ -277,14 +277,14 @@ export function FxConverterBadge({
               key={preset.label}
               type="button"
               onClick={() => applyPreset(preset.currency, preset.amount)}
-              className="rounded-lg border border-white/10 bg-zinc-800/80 px-2.5 py-1 text-xs font-medium text-zinc-200 transition-all hover:border-emerald-400/40 hover:bg-zinc-800 hover:text-emerald-300 active:scale-[0.97] tabular-nums"
+              className="rounded-full bg-white/[0.08] px-3 py-1 text-xs font-medium text-[#E5E5EA] transition-colors hover:bg-[#0A84FF]/20 hover:text-[#409CFF] active:scale-[0.97] tabular-nums"
             >
               {preset.label}
             </button>
           ))}
         </div>
 
-        <p className="mt-3 flex items-center justify-between border-t border-white/10 pt-2.5 text-[11px] text-zinc-400 tabular-nums">
+        <p className="mt-3 flex items-center justify-between border-t border-white/[0.08] pt-2.5 text-[11px] text-[#86868B] tabular-nums">
           <span>来源：{fxRate.source}</span>
           <span>更新：{formatSydneyClock(fxRate.updatedAt)}</span>
         </p>

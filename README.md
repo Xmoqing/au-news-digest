@@ -17,6 +17,7 @@
   - 可选配置环境变量 `ACCESS_PASSWORD`：未设置时保持免密访问；设置后首次访问弹出简洁口令框，验证通过后 HttpOnly Cookie 记住 30 天，并同步保护 `GET /api/news` 与 `POST /api/refresh` 防止外部恶意刷接口消耗 API 额度。
 - **实时澳元/人民币汇率胶囊 + 双向换算小工具**：通过 `/api/exchange-rate`（Frankfurter ECB 主源 + ExchangeRate-API 备用源，15 分钟内存缓存）展示 `🇦🇺 1 AUD ≈ ¥X.XXXX CNY`，点击胶囊展开双向澳元 ⇄ 人民币实时换算器。
 - **跨媒体智能主题合并（去重防刷屏）**：抓取编译时自动结合近 24 小时已入库主新闻上下文，由 Gemini 识别同一突发事件并归并至同一 `cluster_id`；目录仅展示主题主卡片并高亮「综合 N 家媒体报道」，详情页内可直接点击媒体 Tab 切换不同媒体的报道正文。
+- **历史文章分类一键校准 (`/api/reclassify-history`)**：支持在顶部工具栏点击「校准分类」图标按钮，或浏览器直接访问 `/api/reclassify-history?pwd=你的密码`（支持 `GET` / `POST`），按每批 50 篇将历史旧文章仅重新判定 `category` 字段写回 SQLite，不删除文章、不重新翻译正文。
 - **无损平滑数据库迁移 + 1000 篇滚动持久化**：启动时通过 `PRAGMA table_info(articles)` 安全检查缺失列再 `ALTER TABLE`，100% 保留极空间 NAS 上现有的 `data/news.db` 历史新闻与译文。
 
 ## 极空间 / NAS Docker Compose 部署
