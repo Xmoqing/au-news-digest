@@ -1,0 +1,426 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Scroll-driven tablist edge fade properties (must be registered via @property for smooth interpolation) */
+@property --fade-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+:root {
+  /* Raw light & dark color tokens */
+  --color-canvas-light: #f6f8fa;
+  --color-canvas-dark: #090c10;
+
+  --color-surface-light: #ffffff;
+  --color-surface-dark: #10151c;
+
+  --color-surface-elevated-light: #f0f9f8;
+  --color-surface-elevated-dark: #15212b;
+
+  --color-surface-subtle-light: #eef2f6;
+  --color-surface-subtle-dark: #171e28;
+
+  --color-ink-light: #0f172a;
+  --color-ink-dark: #f1f5f9;
+
+  --color-ink-secondary-light: #334155;
+  --color-ink-secondary-dark: #cbd5e1;
+
+  --color-ink-muted-light: #64748b;
+  --color-ink-muted-dark: #94a3b8;
+
+  --color-border-light: #e2e8f0;
+  --color-border-dark: #1e293b;
+
+  --color-accent-light: #0f766e;
+  --color-accent-dark: #2dd4bf;
+
+  --color-accent-soft-light: rgba(15, 118, 110, 0.1);
+  --color-accent-soft-dark: rgba(45, 212, 191, 0.14);
+
+  --color-scrollbar-track-light: transparent;
+  --color-scrollbar-track-dark: transparent;
+  --color-scrollbar-thumb-light: #94a3b8;
+  --color-scrollbar-thumb-dark: #475569;
+
+  /* Elder-friendly reading scale multiplier (kept off html font-size so <meta name="text-scale"> works natively) */
+  --reader-scale: 1;
+
+  /* Light-mode default values (mandatory fallback for browsers without light-dark()) */
+  --color-canvas: var(--color-canvas-light);
+  --color-surface: var(--color-surface-light);
+  --color-surface-elevated: var(--color-surface-elevated-light);
+  --color-surface-subtle: var(--color-surface-subtle-light);
+  --color-ink: var(--color-ink-light);
+  --color-ink-secondary: var(--color-ink-secondary-light);
+  --color-ink-muted: var(--color-ink-muted-light);
+  --color-border: var(--color-border-light);
+  --color-accent: var(--color-accent-light);
+  --color-accent-soft: var(--color-accent-soft-light);
+  --color-scrollbar-track: var(--color-scrollbar-track-light);
+  --color-scrollbar-thumb: var(--color-scrollbar-thumb-light);
+
+  /* Fallback for browsers without light-dark() support */
+  @media (prefers-color-scheme: dark) {
+    --color-canvas: var(--color-canvas-dark);
+    --color-surface: var(--color-surface-dark);
+    --color-surface-elevated: var(--color-surface-elevated-dark);
+    --color-surface-subtle: var(--color-surface-subtle-dark);
+    --color-ink: var(--color-ink-dark);
+    --color-ink-secondary: var(--color-ink-secondary-dark);
+    --color-ink-muted: var(--color-ink-muted-dark);
+    --color-border: var(--color-border-dark);
+    --color-accent: var(--color-accent-dark);
+    --color-accent-soft: var(--color-accent-soft-dark);
+    --color-scrollbar-track: var(--color-scrollbar-track-dark);
+    --color-scrollbar-thumb: var(--color-scrollbar-thumb-dark);
+  }
+
+  /* Modern light-dark() tokens */
+  @supports (color: light-dark(white, black)) {
+    --color-canvas: light-dark(var(--color-canvas-light), var(--color-canvas-dark));
+    --color-surface: light-dark(var(--color-surface-light), var(--color-surface-dark));
+    --color-surface-elevated: light-dark(var(--color-surface-elevated-light), var(--color-surface-elevated-dark));
+    --color-surface-subtle: light-dark(var(--color-surface-subtle-light), var(--color-surface-subtle-dark));
+    --color-ink: light-dark(var(--color-ink-light), var(--color-ink-dark));
+    --color-ink-secondary: light-dark(var(--color-ink-secondary-light), var(--color-ink-secondary-dark));
+    --color-ink-muted: light-dark(var(--color-ink-muted-light), var(--color-ink-muted-dark));
+    --color-border: light-dark(var(--color-border-light), var(--color-border-dark));
+    --color-accent: light-dark(var(--color-accent-light), var(--color-accent-dark));
+    --color-accent-soft: light-dark(var(--color-accent-soft-light), var(--color-accent-soft-dark));
+    --color-scrollbar-track: light-dark(var(--color-scrollbar-track-light), var(--color-scrollbar-track-dark));
+    --color-scrollbar-thumb: light-dark(var(--color-scrollbar-thumb-light), var(--color-scrollbar-thumb-dark));
+  }
+
+  /* Viewport-wide native UI theming */
+  color-scheme: light dark;
+  accent-color: var(--color-accent);
+  scrollbar-color: var(--color-scrollbar-thumb) var(--color-scrollbar-track);
+}
+
+/* Elder-friendly A- / A+ reader scale classes */
+.reader-scale-standard {
+  --reader-scale: 1;
+}
+
+.reader-scale-large {
+  --reader-scale: 1.18;
+}
+
+.reader-scale-xlarge {
+  --reader-scale: 1.36;
+}
+
+html,
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Pane custom scrollbars (no transitions on scrollbar-color to prevent WebKit flicker) */
+.pane-scroller {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-scrollbar-thumb) var(--color-scrollbar-track);
+  overscroll-behavior-y: contain;
+}
+
+@supports not (scrollbar-color: auto) {
+  .pane-scroller {
+    scrollbar-width: auto;
+  }
+
+  .pane-scroller::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .pane-scroller::-webkit-scrollbar-thumb {
+    background: var(--color-scrollbar-thumb);
+    border-radius: 9999px;
+  }
+
+  .pane-scroller::-webkit-scrollbar-track {
+    background: var(--color-scrollbar-track);
+  }
+}
+
+/* Single-row horizontally scrollable category tablist with scroll-driven edge fades */
+.category-tablist {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.25rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: inline proximity;
+  scroll-padding-inline: 2.25rem;
+  scrollbar-width: none;
+
+  --fade-size: 2.25rem;
+  --fade-dir: right;
+  --fade-start-pos: 0;
+  --fade-end-pos: 100%;
+  mask:
+    linear-gradient(black, black) no-clip subtract,
+    linear-gradient(to var(--fade-dir), black, transparent) var(--fade-start-pos) 0 / var(--fade-start) 100% no-repeat no-clip,
+    linear-gradient(to var(--fade-dir), transparent, black) var(--fade-end-pos) 0 / var(--fade-end) 100% no-repeat no-clip;
+}
+
+.category-tablist::-webkit-scrollbar {
+  display: none;
+}
+
+@supports (animation-timeline: scroll()) {
+  .category-tablist {
+    animation: reveal-fade-start linear both, hide-fade-end linear both;
+    animation-timeline: scroll(self inline);
+    animation-range: 0 var(--fade-size), calc(100% - var(--fade-size)) 100%;
+  }
+}
+
+@supports not (animation-timeline: scroll()) {
+  .category-tablist {
+    transition: --fade-start 0.2s, --fade-end 0.2s;
+  }
+
+  .category-tablist.more-start {
+    --fade-start: var(--fade-size);
+  }
+
+  .category-tablist.more-end {
+    --fade-end: var(--fade-size);
+  }
+}
+
+@keyframes reveal-fade-start {
+  to {
+    --fade-start: var(--fade-size);
+  }
+}
+
+@keyframes hide-fade-end {
+  from {
+    --fade-end: var(--fade-size);
+  }
+}
+
+.category-tab {
+  position: relative;
+  flex: none;
+  scroll-snap-align: start;
+  white-space: nowrap;
+  color: var(--color-ink-muted);
+  transition: color 150ms ease;
+}
+
+.category-tab:hover {
+  color: var(--color-ink);
+}
+
+/* Selected indicator driven directly by aria-selected (border shape survives forced-colors without cluttering the glowing capsule) */
+.category-tab[aria-selected="true"] {
+  color: var(--color-accent);
+}
+
+@media (forced-colors: active) {
+  .category-tab[aria-selected="true"]::after {
+    content: "";
+    position: absolute;
+    inset: auto 0.75rem 0;
+    border-block-end: 2.5px solid CanvasText;
+    border-radius: 9999px;
+  }
+}
+
+/* Scalable relative typography for elder-friendly reading (unitless line-heights + rem units) */
+.card-title-scaled {
+  font-size: calc(0.96rem * var(--reader-scale));
+  line-height: 1.42;
+}
+
+.card-summary-scaled {
+  font-size: calc(0.83rem * var(--reader-scale));
+  line-height: 1.58;
+}
+
+.article-headline {
+  font-size: calc(clamp(1.3rem, 1.05rem + 0.9vw, 1.85rem) * var(--reader-scale));
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+}
+
+.article-summary-scaled {
+  font-size: calc(0.95rem * var(--reader-scale));
+  line-height: 1.7;
+}
+
+.article-keypoint-scaled {
+  font-size: calc(0.94rem * var(--reader-scale));
+  line-height: 1.65;
+}
+
+.article-body-scaled {
+  font-size: calc(1.02rem * var(--reader-scale));
+  line-height: 1.9;
+}
+
+/* Ambient top radial glow: clearly visible emerald -> deep indigo aura in Dark Mode */
+.ambient-top-glow {
+  background:
+    radial-gradient(65% 110% at 15% -15%, rgba(16, 185, 129, 0.08), transparent 68%),
+    radial-gradient(58% 105% at 85% -20%, rgba(59, 130, 246, 0.07), transparent 68%);
+}
+
+@media (prefers-color-scheme: dark) {
+  .ambient-top-glow {
+    background:
+      radial-gradient(62% 115% at 18% -10%, rgba(16, 185, 129, 0.17), transparent 66%),
+      radial-gradient(58% 110% at 82% -15%, rgba(59, 130, 246, 0.10), transparent 68%),
+      radial-gradient(45% 80% at 50% -18%, rgba(20, 184, 166, 0.11), transparent 70%);
+  }
+}
+
+/* Luminous flowing emerald -> cyan -> indigo/violet border for AI Core Summary card */
+@keyframes ai-border-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.ai-summary-glow-frame {
+  background: linear-gradient(
+    125deg,
+    rgba(16, 185, 129, 0.55),
+    rgba(45, 212, 191, 0.35),
+    rgba(99, 102, 241, 0.45),
+    rgba(139, 92, 246, 0.4),
+    rgba(16, 185, 129, 0.55)
+  );
+  background-size: 260% 260%;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ai-summary-glow-frame {
+    background: linear-gradient(
+      125deg,
+      rgba(52, 211, 153, 0.65),
+      rgba(34, 211, 238, 0.42),
+      rgba(99, 102, 241, 0.55),
+      rgba(168, 85, 247, 0.48),
+      rgba(52, 211, 153, 0.65)
+    );
+    background-size: 260% 260%;
+    box-shadow:
+      0 0 28px rgba(16, 185, 129, 0.13),
+      0 10px 30px rgba(0, 0, 0, 0.35);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ai-summary-glow-frame {
+    animation: ai-border-flow 7s ease-in-out infinite;
+  }
+}
+
+/* Mobile slide-over drill-down transition gated on prefers-reduced-motion */
+.mobile-detail-drawer {
+  overscroll-behavior-x: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .mobile-detail-drawer {
+    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease;
+  }
+}
+
+/* Native Popover API top-layer spring entry/exit animation (@starting-style + allow-discrete + overlay + linear() spring) */
+.fx-converter-popover {
+  --fx-spring: linear(
+    0, 0.012 1.2%, 0.048 2.5%, 0.19 5.5%, 0.56 12%, 0.85 19.5%,
+    0.99 27%, 1.032 34%, 1.036 40%, 1.018 52%, 1.003 68%, 0.999 84%, 1
+  );
+  opacity: 0;
+  transform-origin: top left;
+  transition-property: opacity, transform, display, overlay;
+  transition-duration: 0.24s;
+  transition-timing-function: ease-out;
+  transition-behavior: allow-discrete;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fx-converter-popover {
+    transform: translateY(-4px) scale(0.96);
+    /* Fallback cubic-bezier overridden by linear() spring in supporting browsers */
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+    transition-timing-function: var(--fx-spring);
+  }
+}
+
+.fx-converter-popover:is(:popover-open, .\:popover-open):where(:not([data-closing])) {
+  display: block;
+  opacity: 1;
+
+  @starting-style {
+    opacity: 0;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    transform: translateY(0) scale(1);
+
+    @starting-style {
+      transform: translateY(-4px) scale(0.96);
+    }
+  }
+}
+
+.fx-converter-popover::backdrop {
+  background: rgba(15, 23, 42, 0);
+  transition-property: background-color, display, overlay;
+  transition-duration: 0.22s;
+  transition-timing-function: ease-out;
+  transition-behavior: allow-discrete;
+}
+
+.fx-converter-popover:is(:popover-open, .\:popover-open):where(:not([data-closing]))::backdrop {
+  background: rgba(15, 23, 42, 0.16);
+
+  @starting-style {
+    background: rgba(15, 23, 42, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-converter-popover,
+  .fx-converter-popover::backdrop {
+    transition-duration: 0.1s;
+    transition-timing-function: ease-out;
+  }
+}
+
+/* Gate Anchor Positioning inside @supports so unsupported browsers keep centered native popover placement */
+@supports (position-area: block-end) {
+  .fx-converter-popover {
+    inset: auto;
+    margin: 0.45rem 0 0 0;
+    position-area: block-end span-inline-start;
+    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+  }
+}

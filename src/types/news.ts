@@ -1,0 +1,215 @@
+export type NewsCategory = '澳洲要闻' | '国际热点' | '经济科技' | '社会生活';
+
+export const NEWS_CATEGORIES: readonly NewsCategory[] = [
+  '澳洲要闻',
+  '国际热点',
+  '经济科技',
+  '社会生活',
+] as const;
+
+export type CategoryFilter = '全部' | NewsCategory;
+
+export const CATEGORY_FILTERS: readonly CategoryFilter[] = [
+  '全部',
+  ...NEWS_CATEGORIES,
+] as const;
+
+export type SourceId =
+  | 'abc-au'
+  | 'abc-nsw'
+  | 'abc-business'
+  | 'guardian-au'
+  | 'sbs-news'
+  | 'smh-sydney'
+  | 'bbc-world'
+  | 'guardian-world'
+  | 'aljazeera'
+  | 'cnbc-top'
+  | 'techcrunch'
+  | 'npr-news';
+
+export interface RssSource {
+  id: SourceId;
+  name: string;
+  shortName: string;
+  region: 'au' | 'global';
+  url: string;
+  defaultCategory: NewsCategory;
+}
+
+export const RSS_SOURCES: readonly RssSource[] = [
+  // Australian sources (4)
+  {
+    id: 'abc-au',
+    name: 'ABC News Australia',
+    shortName: 'ABC News',
+    region: 'au',
+    url: 'https://www.abc.net.au/news/feed/51120/rss.xml',
+    defaultCategory: '澳洲要闻',
+  },
+  {
+    id: 'abc-nsw',
+    name: 'ABC Sydney / NSW',
+    shortName: 'ABC NSW',
+    region: 'au',
+    url: 'https://www.abc.net.au/news/feed/52498/rss.xml',
+    defaultCategory: '澳洲要闻',
+  },
+  {
+    id: 'guardian-au',
+    name: 'The Guardian Australia',
+    shortName: 'Guardian AU',
+    region: 'au',
+    url: 'https://www.theguardian.com/au/rss',
+    defaultCategory: '澳洲要闻',
+  },
+  {
+    id: 'sbs-news',
+    name: 'SBS News',
+    shortName: 'SBS News',
+    region: 'au',
+    url: 'https://www.sbs.com.au/news/topic/latest/feed',
+    defaultCategory: '澳洲要闻',
+  },
+  {
+    id: 'smh-sydney',
+    name: 'The Sydney Morning Herald',
+    shortName: 'SMH Sydney',
+    region: 'au',
+    url: 'https://www.smh.com.au/rss/feed.xml',
+    defaultCategory: '澳洲要闻',
+  },
+  {
+    id: 'abc-business',
+    name: 'ABC News Business',
+    shortName: 'ABC Business',
+    region: 'au',
+    url: 'https://www.abc.net.au/news/feed/51892/rss.xml',
+    defaultCategory: '经济科技',
+  },
+  // Global sources (6)
+  {
+    id: 'bbc-world',
+    name: 'BBC World News',
+    shortName: 'BBC World',
+    region: 'global',
+    url: 'https://feeds.bbci.co.uk/news/world/rss.xml',
+    defaultCategory: '国际热点',
+  },
+  {
+    id: 'guardian-world',
+    name: 'The Guardian World',
+    shortName: 'Guardian World',
+    region: 'global',
+    url: 'https://www.theguardian.com/world/rss',
+    defaultCategory: '国际热点',
+  },
+  {
+    id: 'aljazeera',
+    name: 'Al Jazeera English',
+    shortName: 'Al Jazeera',
+    region: 'global',
+    url: 'https://www.aljazeera.com/xml/rss/all.xml',
+    defaultCategory: '国际热点',
+  },
+  {
+    id: 'cnbc-top',
+    name: 'CNBC Top News',
+    shortName: 'CNBC',
+    region: 'global',
+    url: 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114',
+    defaultCategory: '经济科技',
+  },
+  {
+    id: 'techcrunch',
+    name: 'TechCrunch',
+    shortName: 'TechCrunch',
+    region: 'global',
+    url: 'https://techcrunch.com/feed/',
+    defaultCategory: '经济科技',
+  },
+  {
+    id: 'npr-news',
+    name: 'NPR News',
+    shortName: 'NPR News',
+    region: 'global',
+    url: 'https://feeds.npr.org/1001/rss.xml',
+    defaultCategory: '国际热点',
+  },
+] as const;
+
+export interface NewsItem {
+  id: number;
+  original_url: string;
+  source_id: SourceId;
+  source_name: string;
+  original_title: string;
+  original_excerpt: string;
+  original_content: string;
+  zh_title: string;
+  zh_summary: string;
+  zh_key_points: string[];
+  zh_content: string;
+  category: NewsCategory;
+  image_url: string | null;
+  author: string | null;
+  published_at: string;
+  fetched_at: string;
+  ai_translated: boolean;
+  cluster_id: number | null;
+  related_articles?: NewsItem[];
+}
+
+export interface RecentLeadContext {
+  id: number;
+  zh_title: string;
+  source_name: string;
+  category: NewsCategory;
+}
+
+export interface RefreshState {
+  isRefreshing: boolean;
+  startedAt: string | null;
+  progress: {
+    current: number;
+    total: number;
+    stage: string;
+  } | null;
+  lastResult?: RefreshResult | null;
+}
+
+export interface RefreshResult {
+  ok: boolean;
+  added: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  totalInDb: number;
+  lastUpdated: string | null;
+  hasGeminiKey: boolean;
+  message: string;
+  feedErrors: string[];
+}
+
+export interface FxRateInfo {
+  pair: 'AUD/CNY';
+  rate: number;
+  inverseRate: number;
+  change: number | null;
+  changePercent: number | null;
+  updatedAt: string;
+  source: string;
+}
+
+export interface NewsListResponse {
+  items: NewsItem[];
+  total: number;
+  categoryCounts: Record<CategoryFilter, number>;
+  lastUpdated: string | null;
+  lastRefreshSummary: string | null;
+  hasGeminiKey: boolean;
+  authEnabled: boolean;
+  refreshState: RefreshState;
+  cronSchedule: string;
+  fxRate: FxRateInfo | null;
+}

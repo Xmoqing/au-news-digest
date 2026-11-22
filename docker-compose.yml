@@ -1,0 +1,23 @@
+services:
+  au-news-digest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: au-news-digest:latest
+    container_name: au-news-digest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - TZ=${TZ:-Australia/Sydney}
+      - DATABASE_PATH=${DATABASE_PATH:-/app/data/news.db}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-flash-lite-latest}
+      - MAX_ITEMS_PER_FEED=${MAX_ITEMS_PER_FEED:-10}
+      - MAX_ITEMS_PER_GLOBAL_FEED=${MAX_ITEMS_PER_GLOBAL_FEED:-12}
+      - MAX_STORED_ARTICLES=${MAX_STORED_ARTICLES:-1000}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 */2 * * *}
+      # 可选：公网访问口令（留空则免密直接访问；设置后首次访问需输入口令并记住30天，同时保护 /api/refresh）
+      - ACCESS_PASSWORD=${ACCESS_PASSWORD:-}
+    volumes:
+      - ./data:/app/data

@@ -1,0 +1,25 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# local data, archives & env (NEVER push secrets or local SQLite DB to GitHub)
+/data/
+.env
+.env*.local
+*.zip
+*.tar
+
+# editor & os
+.vscode/
+.DS_Store
+npm-debug.log*
+*.tsbuildinfo
+next-env.d.ts

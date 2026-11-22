@@ -1,0 +1,525 @@
+import { GoogleGenAI, Type, type Schema } from '@google/genai';
+import type { NewsCategory, RecentLeadContext, SourceId } from '@/types/news';
+import { NEWS_CATEGORIES } from '@/types/news';
+
+export interface ArticleToTranslate {
+  source_id: SourceId;
+  source_name: string;
+  region: 'au' | 'global';
+  original_title: string;
+  original_excerpt: string;
+  original_content: string;
+  rss_categories: string[];
+}
+
+export interface TranslatedNewsOutput {
+  zh_title: string;
+  zh_summary: string;
+  zh_key_points: string[];
+  zh_content: string;
+  category: NewsCategory;
+  matched_cluster_id: number | null;
+  matched_batch_idx: number | null;
+  ai_translated: boolean;
+  model_used?: string;
+  error?: string;
+}
+
+const DEFAULT_GEMINI_MODEL = 'gemini-flash-lite-latest';
+
+const FALLBACK_MODELS = [
+  'gemini-flash-lite-latest',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+];
+
+const VALID_CATEGORIES = new Set<string>(NEWS_CATEGORIES);
+
+const CATEGORY_ENUM: NewsCategory[] = ['澳洲要闻', '国际热点', '经济科技', '社会生活'];
+
+const SINGLE_ARTICLE_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    zh_title: {
+      type: Type.STRING,
+      description: '地道、精炼、易懂的简体中文新闻标题，不加引号或书名号，30字以内。',
+    },
+    zh_summary: {
+      type: Type.STRING,
+      description: '严格控制在60字以内的连贯核心摘要，适合手机端目录卡片快速浏览。',
+    },
+    zh_key_points: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description:
+        '2至3条清晰简短的分点核心要点（每条不超过45字），用平实直白的中文分别概括“发生了什么”以及“有什么影响”，方便长辈一眼看懂。',
+    },
+    zh_content: {
+      type: Type.STRING,
+      description:
+        '基于英文原文的完整、准确、流畅的简体中文新闻正文翻译。使用自然分段（段落之间用两个换行符 \\n\\n 分隔），忠实于原文信息，不编造事实。',
+    },
+    category: {
+      type: Type.STRING,
+      enum: CATEGORY_ENUM,
+      description:
+        '从四个固定分类中选择最贴切的一个：澳洲要闻、国际热点、经济科技、社会生活。',
+    },
+    matched_cluster_id: {
+      type: Type.INTEGER,
+      nullable: true,
+      description:
+        '如果本篇新闻与「近24小时已入库主新闻列表」中的某一条报道的是完全相同的具体突发事件或同一核心新闻主题，返回那条主新闻的整数 id；若是全新事件，返回 null。',
+    },
+  },
+  required: ['zh_title', 'zh_summary', 'zh_key_points', 'zh_content', 'category'],
+};
+
+const BATCH_ARTICLES_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    articles: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          idx: {
+            type: Type.INTEGER,
+            description: '对应输入新闻的编号 idx（从 0 开始）。',
+          },
+          zh_title: {
+            type: Type.STRING,
+            description: '地道、精炼、易懂的简体中文新闻标题，30字以内。',
+          },
+          zh_summary: {
+            type: Type.STRING,
+            description: '严格控制在60字以内的连贯核心摘要。',
+          },
+          zh_key_points: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description:
+              '2至3条简明分点要点（每条不超过45字），清晰概括“发生了什么”和“有什么影响”，语言通俗易懂，方便长辈阅读。',
+          },
+          zh_content: {
+            type: Type.STRING,
+            description: '完整流畅的简体中文正文翻译，使用 \\n\\n 合理分段。',
+          },
+          category: {
+            type: Type.STRING,
+            enum: CATEGORY_ENUM,
+          },
+          matched_cluster_id: {
+            type: Type.INTEGER,
+            nullable: true,
+            description:
+              '如果本篇新闻与「近24小时已入库主新闻列表」中的某条主新闻报道的是同一具体突发事件/同一主题，填入那条主新闻的整数 id；否则填 null。',
+          },
+          matched_batch_idx: {
+            type: Type.INTEGER,
+            nullable: true,
+            description:
+              '仅当 matched_cluster_id 为 null 时：如果本篇新闻与本批次中编号更小（idx < 当前 idx）的某篇新闻报道的是同一具体事件，填入那个更小的 idx；否则填 null。',
+          },
+        },
+        required: ['idx', 'zh_title', 'zh_summary', 'zh_key_points', 'zh_content', 'category'],
+      },
+    },
+  },
+  required: ['articles'],
+};
+
+export function getGeminiModel(): string {
+  const configured = process.env.GEMINI_MODEL?.trim();
+  return configured && configured.length > 0 ? configured : DEFAULT_GEMINI_MODEL;
+}
+
+export function getModelChain(): string[] {
+  const primary = getGeminiModel();
+  return Array.from(new Set([primary, ...FALLBACK_MODELS]));
+}
+
+export function hasConfiguredGeminiKey(): boolean {
+  const key = process.env.GEMINI_API_KEY?.trim();
+  return Boolean(key && key.length > 10 && key !== 'your_gemini_api_key_here');
+}
+
+function getClient(): GoogleGenAI | null {
+  if (!hasConfiguredGeminiKey()) return null;
+  return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY!.trim() });
+}
+
+export function inferFallbackCategory(
+  sourceId: SourceId,
+  region: 'au' | 'global',
+  title: string,
+  rssCategories: string[]
+): NewsCategory {
+  const haystack = `${title} ${rssCategories.join(' ')}`.toLowerCase();
+
+  if (
+    sourceId === 'cnbc-top' ||
+    sourceId === 'techcrunch' ||
+    sourceId === 'abc-business' ||
+    /\b(economy|economic|rba|fed|interest rate|inflation|housing|property|rent|mortgage|asx|stock|market|ipo|business|finance|tax|tariff|gdp|bank|ai|artificial intelligence|nvidia|apple|google|meta|anthropic|tech|startup|chip|semiconductor|data center|cybersecurity|software)\b/.test(
+      haystack
+    )
+  ) {
+    return '经济科技';
+  }
+
+  if (
+    /\b(health|medical|hospital|sport|cricket|afl|aflw|football|olympic|culture|review|film|music|weather|climate|lifestyle|family|education|travel|food)\b/.test(
+      haystack
+    )
+  ) {
+    return '社会生活';
+  }
+
+  if (
+    region === 'global' ||
+    sourceId === 'bbc-world' ||
+    sourceId === 'guardian-world' ||
+    sourceId === 'aljazeera' ||
+    sourceId === 'npr-news'
+  ) {
+    return '国际热点';
+  }
+
+  return '澳洲要闻';
+}
+
+function normalizeSummary(text: string): string {
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  if (cleaned.length <= 64) return cleaned;
+  return `${cleaned.slice(0, 58).replace(/[，、；：,.;:\s]+$/, '')}…`;
+}
+
+function normalizeKeyPoints(points: unknown): string[] {
+  if (!Array.isArray(points)) return [];
+  return points
+    .map((p) =>
+      typeof p === 'string'
+        ? p
+            .replace(/^[\s•·\-*\d.、]+/, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+        : ''
+    )
+    .filter((p) => p.length >= 4)
+    .slice(0, 3);
+}
+
+function normalizeParagraphs(text: string): string {
+  return text
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\n+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function parseNullableInt(val: unknown): number | null {
+  if (typeof val === 'number' && Number.isInteger(val) && val >= 0) {
+    return val;
+  }
+  return null;
+}
+
+function buildRecentLeadsContextBlock(recentLeads: RecentLeadContext[]): string {
+  if (recentLeads.length === 0) {
+    return '（当前暂无近24小时已入库主新闻，所有 matched_cluster_id 请填 null）';
+  }
+  return recentLeads
+    .slice(0, 60)
+    .map((lead) => `[id=${lead.id}] (${lead.source_name}/${lead.category}) ${lead.zh_title}`)
+    .join('\n');
+}
+
+function buildFallbackOutput(input: ArticleToTranslate, error?: string): TranslatedNewsOutput {
+  const fallbackCategory = inferFallbackCategory(
+    input.source_id,
+    input.region,
+    input.original_title,
+    input.rss_categories
+  );
+  const fallbackContent = input.original_content || input.original_excerpt || input.original_title;
+  return {
+    zh_title: input.original_title,
+    zh_summary: normalizeSummary(input.original_excerpt || input.original_title),
+    zh_key_points: [],
+    zh_content: normalizeParagraphs(fallbackContent),
+    category: fallbackCategory,
+    matched_cluster_id: null,
+    matched_batch_idx: null,
+    ai_translated: false,
+    error,
+  };
+}
+
+function isPermanentModelSkipError(errMsg: string): boolean {
+  return /404|NOT_FOUND|GenerateRequestsPerDay|PerDay|quota exceeded|RESOURCE_EXHAUSTED/i.test(
+    errMsg
+  );
+}
+
+async function generateWithFallback(
+  client: GoogleGenAI,
+  contents: string,
+  responseSchema: Schema,
+  exhaustedModels: Set<string>
+): Promise<{ text: string; model: string }> {
+  const models = getModelChain().filter((m) => !exhaustedModels.has(m));
+  if (models.length === 0) {
+    throw new Error('所有可用 Gemini 模型的当日免费额度均已耗尽，请稍后或明日再试。');
+  }
+
+  let lastError = 'Unknown Gemini error';
+  for (const model of models) {
+    try {
+      const response = await client.models.generateContent({
+        model,
+        contents,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema,
+          temperature: 0.25,
+        },
+      });
+
+      const rawText = response.text?.trim();
+      if (!rawText) {
+        throw new Error('Empty response text from Gemini');
+      }
+      return { text: rawText, model };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      lastError = `${model}: ${errMsg}`;
+      if (isPermanentModelSkipError(errMsg)) {
+        exhaustedModels.add(model);
+      }
+      console.warn(
+        `[Gemini] Model "${model}" failed, trying fallback if available:`,
+        errMsg.slice(0, 260)
+      );
+    }
+  }
+
+  throw new Error(lastError);
+}
+
+export async function translateArticlesBatch(
+  inputs: ArticleToTranslate[],
+  recentLeads: RecentLeadContext[] = [],
+  exhaustedModels: Set<string> = new Set()
+): Promise<TranslatedNewsOutput[]> {
+  if (inputs.length === 0) return [];
+
+  const client = getClient();
+  if (!client) {
+    return inputs.map((item) => buildFallbackOutput(item));
+  }
+
+  const validLeadIds = new Set(recentLeads.map((l) => l.id));
+
+  const articlesBlock = inputs
+    .map((item, idx) => {
+      const body = (item.original_content || item.original_excerpt || item.original_title).slice(
+        0,
+        2200
+      );
+      return [
+        `=== 新闻 #${idx} ===`,
+        `idx: ${idx}`,
+        `媒体来源: ${item.source_name}（${item.region === 'au' ? '澳洲媒体' : '国际媒体'}）`,
+        `原始标签: ${item.rss_categories.join(', ') || '无'}`,
+        `英文标题: ${item.original_title}`,
+        `英文导语: ${item.original_excerpt || '无'}`,
+        `英文正文:\n${body}`,
+      ].join('\n');
+    })
+    .join('\n\n');
+
+  const prompt = [
+    '你是一位资深国际与澳洲中文新闻编辑，正在为澳洲华人及家中长辈编译精选国际与澳洲主流新闻（AU News Digest）。',
+    `下面共有 ${inputs.length} 篇新抓取的英文新闻，请逐篇准确翻译、提炼要点、分类，并判断是否与已有新闻属于**同一突发事件/同一新闻主题**，按原 idx 返回结构化 JSON 数组（必须包含全部 ${inputs.length} 篇，不得遗漏）：`,
+    '',
+    '【翻译与编辑要求】',
+    '1. zh_title：地道、清楚、易懂的简体中文新闻标题，30字以内，避免晦涩直译。',
+    '2. zh_summary：严格控制在 60 字以内的连贯核心摘要，用于目录卡片快速预览。',
+    '3. zh_key_points：提炼 2 至 3 条简明分点要点（每条不超过 45 字），用平实易懂的话分别讲清「发生了什么」和「有什么影响/后续看点」，方便长辈快速抓重点。',
+    '4. zh_content：将每篇英文正文完整、流畅、忠实地翻译为简体中文，合理分段（段落之间用 \\n\\n 分隔）。常见英文专有名词首次出现时可加简明中文解释（如 RBA 澳联储、Fed 美联储、NSW 新州）。',
+    '5. category：必须从 ["澳洲要闻", "国际热点", "经济科技", "社会生活"] 中选择最贴切的一项（TechCrunch、CNBC、ABC Business 的科技与财经商业报道通常归入「经济科技」）。',
+    '6. 跨媒体主题合并规则（严格判定，宁缺毋滥）：',
+    '   - 只有当两篇报道讲述的是**同一个具体突发事件或同一个核心新闻事件**（例如多家媒体同时报道同一场外交会谈、同一场自然灾害、同一家公司同一天的财报/IPO）时，才归为同一主题。',
+    '   - 仅仅是大方向相似（例如两篇分别报道不同国家的大选、或不同公司的财报）绝对**不要**合并，应各自保持 null。',
+    '   - 如果匹配到下方「近24小时已入库主新闻列表」中的某条新闻，将 matched_cluster_id 设为该条的整数 id，matched_batch_idx 设为 null。',
+    '   - 如果未匹配已有新闻，但与本批次中编号更小（idx < 当前 idx）的某篇新闻报道的是同一事件，将 matched_cluster_id 设为 null，matched_batch_idx 设为那个更小的 idx。',
+    '   - 如果是全新独立事件，两者均设为 null。',
+    '',
+    '【近24小时已入库主新闻列表】',
+    buildRecentLeadsContextBlock(recentLeads),
+    '',
+    '【本批次待编译新文章】',
+    articlesBlock,
+  ].join('\n');
+
+  try {
+    const { text, model } = await generateWithFallback(
+      client,
+      prompt,
+      BATCH_ARTICLES_SCHEMA,
+      exhaustedModels
+    );
+
+    const parsed = JSON.parse(text) as {
+      articles?: Array<{
+        idx?: number;
+        zh_title?: string;
+        zh_summary?: string;
+        zh_key_points?: string[];
+        zh_content?: string;
+        category?: string;
+        matched_cluster_id?: number | null;
+        matched_batch_idx?: number | null;
+      }>;
+    };
+
+    const byIdx = new Map<number, NonNullable<typeof parsed.articles>[number]>();
+    for (const row of parsed.articles ?? []) {
+      if (typeof row?.idx === 'number') {
+        byIdx.set(row.idx, row);
+      }
+    }
+
+    const outputs: TranslatedNewsOutput[] = [];
+    for (let i = 0; i < inputs.length; i++) {
+      const input = inputs[i];
+      const match = byIdx.get(i);
+      if (match && match.zh_title && match.zh_content) {
+        const fallbackCategory = inferFallbackCategory(
+          input.source_id,
+          input.region,
+          input.original_title,
+          input.rss_categories
+        );
+        const category =
+          match.category && VALID_CATEGORIES.has(match.category)
+            ? (match.category as NewsCategory)
+            : fallbackCategory;
+
+        const rawLeadId = parseNullableInt(match.matched_cluster_id);
+        const matchedClusterId = rawLeadId !== null && validLeadIds.has(rawLeadId) ? rawLeadId : null;
+        const rawBatchIdx = parseNullableInt(match.matched_batch_idx);
+        const matchedBatchIdx =
+          matchedClusterId === null && rawBatchIdx !== null && rawBatchIdx < i ? rawBatchIdx : null;
+
+        outputs.push({
+          zh_title: match.zh_title.trim(),
+          zh_summary: normalizeSummary(
+            match.zh_summary?.trim() || input.original_excerpt || match.zh_title
+          ),
+          zh_key_points: normalizeKeyPoints(match.zh_key_points),
+          zh_content: normalizeParagraphs(match.zh_content.trim()),
+          category,
+          matched_cluster_id: matchedClusterId,
+          matched_batch_idx: matchedBatchIdx,
+          ai_translated: true,
+          model_used: model,
+        });
+      } else {
+        const single = await translateAndSummarizeArticle(input, recentLeads, exhaustedModels);
+        outputs.push(single);
+      }
+    }
+
+    console.log(`[Gemini] Batch translated ${inputs.length} articles via ${model}`);
+    return outputs;
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[Gemini] Batch translation failed (${inputs.length} articles):`,
+      errMsg.slice(0, 320)
+    );
+    return inputs.map((item) => buildFallbackOutput(item, errMsg));
+  }
+}
+
+export async function translateAndSummarizeArticle(
+  input: ArticleToTranslate,
+  recentLeads: RecentLeadContext[] = [],
+  exhaustedModels: Set<string> = new Set()
+): Promise<TranslatedNewsOutput> {
+  const client = getClient();
+  if (!client) {
+    return buildFallbackOutput(input);
+  }
+
+  const validLeadIds = new Set(recentLeads.map((l) => l.id));
+  const fallbackCategory = inferFallbackCategory(
+    input.source_id,
+    input.region,
+    input.original_title,
+    input.rss_categories
+  );
+
+  const prompt = [
+    '你是一位资深国际与澳洲中文新闻编辑，负责为华人读者及家中长辈编译精选主流媒体新闻。',
+    '请将以下英文新闻准确翻译并整理为结构化 JSON：',
+    '1. zh_title：地道、清楚、易懂的简体中文新闻标题，30字以内。',
+    '2. zh_summary：严格控制在 60 字以内的连贯核心摘要。',
+    '3. zh_key_points：提炼 2 至 3 条简明分点要点（每条不超过 45 字），概括“发生了什么”和“有什么影响”。',
+    '4. zh_content：完整流畅的简体中文正文翻译，使用 \\n\\n 合理分段。',
+    '5. category：必须从 ["澳洲要闻", "国际热点", "经济科技", "社会生活"] 中选择最匹配的一项。',
+    '6. matched_cluster_id：如果与下方「近24小时已入库主新闻列表」中的某一条报道的是完全相同的具体事件，填入其整数 id；否则填 null。',
+    '',
+    '【近24小时已入库主新闻列表】',
+    buildRecentLeadsContextBlock(recentLeads),
+    '',
+    `媒体来源: ${input.source_name}（${input.region === 'au' ? '澳洲媒体' : '国际媒体'}）`,
+    `原始标签: ${input.rss_categories.join(', ') || '无'}`,
+    `英文标题: ${input.original_title}`,
+    `英文导语: ${input.original_excerpt || '无'}`,
+    `英文正文:\n${(input.original_content || input.original_excerpt || input.original_title).slice(0, 3400)}`,
+  ].join('\n');
+
+  try {
+    const { text, model } = await generateWithFallback(
+      client,
+      prompt,
+      SINGLE_ARTICLE_SCHEMA,
+      exhaustedModels
+    );
+
+    const parsed = JSON.parse(text) as Partial<TranslatedNewsOutput>;
+    const category =
+      parsed.category && VALID_CATEGORIES.has(parsed.category)
+        ? (parsed.category as NewsCategory)
+        : fallbackCategory;
+
+    const rawLeadId = parseNullableInt(parsed.matched_cluster_id);
+    const matchedClusterId = rawLeadId !== null && validLeadIds.has(rawLeadId) ? rawLeadId : null;
+
+    return {
+      zh_title: parsed.zh_title?.trim() || input.original_title,
+      zh_summary: normalizeSummary(
+        parsed.zh_summary?.trim() || input.original_excerpt || input.original_title
+      ),
+      zh_key_points: normalizeKeyPoints(parsed.zh_key_points),
+      zh_content: normalizeParagraphs(
+        parsed.zh_content?.trim() || input.original_content || input.original_excerpt
+      ),
+      category,
+      matched_cluster_id: matchedClusterId,
+      matched_batch_idx: null,
+      ai_translated: true,
+      model_used: model,
+    };
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[Gemini] Translation failed for "${input.original_title}":`, errMsg.slice(0, 260));
+    return buildFallbackOutput(input, errMsg);
+  }
+}
