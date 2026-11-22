@@ -4,10 +4,11 @@
 
 ## 核心特性
 
-- **12 大澳洲与国际主流 RSS 数据源**（6 澳洲 + 6 国际，自动提取完整正文与高清配图）：
-  - 澳洲媒体：ABC News Australia、ABC Sydney / NSW、ABC News Business、The Sydney Morning Herald (SMH Sydney)、The Guardian Australia、SBS News
-  - 国际媒体：BBC World News、The Guardian World、Al Jazeera English、CNBC Top News、TechCrunch、NPR News
-- **4 大均衡分类体系**：`全部`、`澳洲要闻`、`国际热点`、`经济科技`、`社会生活`（旧版数据库分类自动无缝迁移）。
+- **16 大澳洲与国际主流 RSS 数据源**（含 5 大硬核股市证券与交易市场专属源，自动提取完整正文与高清配图）：
+  - 澳洲本地：ABC News Australia、ABC Sydney / NSW、ABC Business、The Guardian Australia、SBS News、SMH Sydney
+  - 股市证券与交易市场：ASX Markets (Small Caps)、CNBC Investing、CNBC Markets、MarketWatch Live、Seeking Alpha
+  - 国际热点与科技：BBC World News、The Guardian World、Al Jazeera English、NPR News、TechCrunch
+- **5 大精准分类体系**：`全部`、`澳洲要闻`、`国际热点`、`财经市场`（严格聚焦股市/财报/央行利率/外汇大宗商品，自动排除泛零售与个人生活理财）、`科技前沿`、`社会生活`。
 - **Gemini AI 批量深度编译 + 核心要点提炼**：基于 `@google/genai` SDK Structured Outputs，每批合并 6 篇节省免费额度，内置多模型自动降级链（默认 `gemini-flash-lite-latest`，可通过 `GEMINI_MODEL` 热切换），生成中文标题、60 字摘要、**2～3 条分点核心要点（发生了什么 / 有什么影响）**与分段中文全文。
 - **长辈友好阅读优化**：
   - 顶部导航栏内置 **`A- / 标准·大号·特大 / A+`** 字号切换开关（`localStorage` 持久记住）并兼容系统级字体缩放（`<meta name="text-scale" content="scale">`）。

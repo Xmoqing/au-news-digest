@@ -35,6 +35,7 @@ import {
 interface NewsDigestClientProps {
   initialData: NewsListResponse;
   initialArticleId?: number | null;
+  archivedArticleNotice?: boolean;
 }
 
 type FontSizeLevel = 'standard' | 'large' | 'xlarge';
@@ -53,6 +54,7 @@ const FONT_SIZE_STORAGE_KEY = 'au-news-font-size';
 export function NewsDigestClient({
   initialData,
   initialArticleId = null,
+  archivedArticleNotice = false,
 }: NewsDigestClientProps) {
   const router = useRouter();
 
@@ -104,17 +106,26 @@ export function NewsDigestClient({
     initialData.refreshState.progress?.stage ?? null
   );
   const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(
-    null
+    () =>
+      archivedArticleNotice
+        ? { type: 'success', text: '该历史文章已归档，已为您展示最新新闻列表' }
+        : null
   );
   const [isDesktop, setIsDesktop] = useState(false);
+
+  const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
+    setToast({ type, text });
+  }, []);
 
   const tablistRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const backButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastTriggerRef = useRef<HTMLAnchorElement | null>(null);
+  const leftListScrollerRef = useRef<HTMLElement | null>(null);
   const desktopDetailScrollerRef = useRef<HTMLElement | null>(null);
   const mobileDetailScrollerRef = useRef<HTMLDivElement | null>(null);
   const lastProgressCurrentRef = useRef<number>(0);
+  const deepLinkScrolledRef = useRef<boolean>(false);
 
   // Restore user preferences from localStorage (English toggle + elder font size)
   useEffect(() => {
@@ -202,6 +213,31 @@ export function NewsDigestClient({
     observer.observe(last);
     return () => observer.disconnect();
   }, []);
+
+  // Auto-scroll left directory list to the deep-linked card on desktop/unfolded mode
+  useEffect(() => {
+    if (!initialArticleId || !selectedId || deepLinkScrolledRef.current) return;
+    if (!isDesktop) return;
+    const listEl = leftListScrollerRef.current;
+    if (!listEl) return;
+    const cardEl = listEl.querySelector(`[data-article-id="${selectedId}"]`);
+    if (cardEl instanceof HTMLElement) {
+      deepLinkScrolledRef.current = true;
+      requestAnimationFrame(() => {
+        cardEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      });
+    }
+  }, [initialArticleId, selectedId, isDesktop]);
+
+  // Clean stale archived ?article= param from URL gracefully without reloading
+  useEffect(() => {
+    if (!archivedArticleNotice) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('article')) {
+      url.searchParams.delete('article');
+      window.history.replaceState({}, '', url.toString());
+    }
+  }, [archivedArticleNotice]);
 
   // Sync mobile drill-down with browser history (supports Android OS Back gesture)
   useEffect(() => {
@@ -817,6 +853,7 @@ export function NewsDigestClient({
           <main className="flex-1 md:grid md:min-h-0 md:grid-cols-[38%_62%]">
             {/* Left Master Directory List (translucent so top emerald/blue ambient glow shines through) */}
             <section
+              ref={leftListScrollerRef}
               role="tabpanel"
               aria-labelledby={`tab-${activeCategory}`}
               className="pane-scroller bg-transparent md:h-full md:overflow-y-auto md:border-r md:border-slate-200/60 dark:md:border-white/[0.07]"
@@ -869,9 +906,11 @@ export function NewsDigestClient({
             >
               <ArticleDetail
                 article={selectedArticle}
+                initialSubArticleId={initialArticleId}
                 showEnglishOriginal={showEnglishOriginal}
                 onToggleEnglishOriginal={toggleEnglishOriginal}
                 scrollContainerRef={desktopDetailScrollerRef}
+                onNotify={showToast}
               />
             </section>
           </main>
@@ -893,12 +932,14 @@ export function NewsDigestClient({
         >
           <ArticleDetail
             article={selectedArticle}
+            initialSubArticleId={initialArticleId}
             showEnglishOriginal={showEnglishOriginal}
             onToggleEnglishOriginal={toggleEnglishOriginal}
             showBackButton
             onBack={handleMobileBack}
             backButtonRef={backButtonRef}
             scrollContainerRef={mobileDetailScrollerRef}
+            onNotify={showToast}
           />
         </div>
       </div>

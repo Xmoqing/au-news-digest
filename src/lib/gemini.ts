@@ -37,7 +37,7 @@ const FALLBACK_MODELS = [
 
 const VALID_CATEGORIES = new Set<string>(NEWS_CATEGORIES);
 
-const CATEGORY_ENUM: NewsCategory[] = ['澳洲要闻', '国际热点', '经济科技', '社会生活'];
+const CATEGORY_ENUM: NewsCategory[] = ['澳洲要闻', '国际热点', '财经市场', '科技前沿', '社会生活'];
 
 const SINGLE_ARTICLE_SCHEMA: Schema = {
   type: Type.OBJECT,
@@ -65,7 +65,7 @@ const SINGLE_ARTICLE_SCHEMA: Schema = {
       type: Type.STRING,
       enum: CATEGORY_ENUM,
       description:
-        '从四个固定分类中选择最贴切的一个：澳洲要闻、国际热点、经济科技、社会生活。',
+        '从五个固定分类中选择最贴切的一个：澳洲要闻、国际热点、财经市场、科技前沿、社会生活。',
     },
     matched_cluster_id: {
       type: Type.INTEGER,
@@ -159,19 +159,41 @@ export function inferFallbackCategory(
 ): NewsCategory {
   const haystack = `${title} ${rssCategories.join(' ')}`.toLowerCase();
 
+  // Exclude obvious consumer/lifestyle/personal-finance/lawsuit/cyber fluff from 财经市场
+  const isNonMarketFluff =
+    /\b(retired|husband|wife|marriage|grocery|supermarket|cyberattack|hacked|crime database|store opening|court|lawsuit|crime|murder|sport|cricket|afl|recipe|travel)\b/.test(
+      haystack
+    );
+
+  // Strict Stocks, Equities, Central Banks, FX & Commodities check
+  const isPureMarketTopic =
+    /\b(asx|s&p|dow jones|nasdaq|nyse|stock|stocks|shares|equities|wall street|ipo|earnings|eps|revenue beat|guidance|dividend|upgrade|downgrade|price target|merger|acquisition|m&a|rba|fed|federal reserve|interest rate|rate cut|rate hike|cpi|inflation|bond yield|treasury|forex|aud\/usd|aud\/cny|exchange rate|gold price|crude oil|iron ore|lithium|copper|commodit|etf|bull market|bear market|sell-off|rally)\b/.test(
+      haystack
+    );
+
   if (
-    sourceId === 'cnbc-top' ||
+    !isNonMarketFluff &&
+    (sourceId === 'asx-smallcaps' ||
+      sourceId === 'cnbc-investing' ||
+      sourceId === 'cnbc-markets' ||
+      sourceId === 'seeking-alpha' ||
+      isPureMarketTopic)
+  ) {
+    return '财经市场';
+  }
+
+  // Dedicated Tech & Frontier Science
+  if (
     sourceId === 'techcrunch' ||
-    sourceId === 'abc-business' ||
-    /\b(economy|economic|rba|fed|interest rate|inflation|housing|property|rent|mortgage|asx|stock|market|ipo|business|finance|tax|tariff|gdp|bank|ai|artificial intelligence|nvidia|apple|google|meta|anthropic|tech|startup|chip|semiconductor|data center|cybersecurity|software)\b/.test(
+    /\b(ai|artificial intelligence|openai|anthropic|nvidia|apple|google|meta|microsoft|tech|startup|chip|semiconductor|data center|cybersecurity|software|robot|space|nasa|quantum|ev|battery)\b/.test(
       haystack
     )
   ) {
-    return '经济科技';
+    return '科技前沿';
   }
 
   if (
-    /\b(health|medical|hospital|sport|cricket|afl|aflw|football|olympic|culture|review|film|music|weather|climate|lifestyle|family|education|travel|food)\b/.test(
+    /\b(health|medical|hospital|sport|cricket|afl|aflw|football|olympic|culture|review|film|music|weather|climate|lifestyle|family|education|travel|food|retired|grocery)\b/.test(
       haystack
     )
   ) {
@@ -351,7 +373,13 @@ export async function translateArticlesBatch(
     '2. zh_summary：严格控制在 60 字以内的连贯核心摘要，用于目录卡片快速预览。',
     '3. zh_key_points：提炼 2 至 3 条简明分点要点（每条不超过 45 字），用平实易懂的话分别讲清「发生了什么」和「有什么影响/后续看点」，方便长辈快速抓重点。',
     '4. zh_content：将每篇英文正文完整、流畅、忠实地翻译为简体中文，合理分段（段落之间用 \\n\\n 分隔）。常见英文专有名词首次出现时可加简明中文解释（如 RBA 澳联储、Fed 美联储、NSW 新州）。',
-    '5. category：必须从 ["澳洲要闻", "国际热点", "经济科技", "社会生活"] 中选择最贴切的一项（TechCrunch、CNBC、ABC Business 的科技与财经商业报道通常归入「经济科技」）。',
+    '5. category：必须严格遵循以下规则，从 ["澳洲要闻", "国际热点", "财经市场", "科技前沿", "社会生活"] 中选择最贴切的一项：',
+    '   - 财经市场（**严格限定为纯正的股市证券与交易市场频道**）：仅当新闻直接涉及【① 股票市场与大盘指数（美股标普/纳指/道指、澳股 ASX、亚太/欧股涨跌、IPO 上市、上市公司并购重组）；② 上市公司财报、股价异动、华尔街/投行评级调整；③ 央行货币政策（美联储 Fed、澳洲联储 RBA 利率决议、CPI 通胀、国债收益率）；④ 外汇汇率（AUD/USD/CNY）与大宗商品交易（黄金、原油、铁矿石、锂矿价格）】时，才归入「财经市场」。',
+    '   - **严格排除出「财经市场」**：普通消费者零售纠纷（如超市选址/开店诉讼、商场促销）、个人/家庭理财情感或退休生活建议、普通企业或政府机构的非金融类行政/黑客网络安全事件，一律**禁止**归入「财经市场」（请按内容分别归入「澳洲要闻」「国际热点」「科技前沿」或「社会生活」）。',
+    '   - 科技前沿：AI 人工智能、芯片半导体、互联网大厂技术与产品、创业投资、航天科学与网络安全（来自 TechCrunch 的报道通常归入「科技前沿」）。',
+    '   - 澳洲要闻：澳洲联邦与各州政经政策、悉尼/墨尔本本地重大新闻及澳洲本土非证券类企业/司法新闻。',
+    '   - 国际热点：全球地缘政治、外交与重大海外突发事件。',
+    '   - 社会生活：医疗健康、文体赛事、消费零售、个人理财生活故事、气候环境与日常生活话题。',
     '6. 跨媒体主题合并规则（严格判定，宁缺毋滥）：',
     '   - 只有当两篇报道讲述的是**同一个具体突发事件或同一个核心新闻事件**（例如多家媒体同时报道同一场外交会谈、同一场自然灾害、同一家公司同一天的财报/IPO）时，才归为同一主题。',
     '   - 仅仅是大方向相似（例如两篇分别报道不同国家的大选、或不同公司的财报）绝对**不要**合并，应各自保持 null。',
@@ -472,7 +500,7 @@ export async function translateAndSummarizeArticle(
     '2. zh_summary：严格控制在 60 字以内的连贯核心摘要。',
     '3. zh_key_points：提炼 2 至 3 条简明分点要点（每条不超过 45 字），概括“发生了什么”和“有什么影响”。',
     '4. zh_content：完整流畅的简体中文正文翻译，使用 \\n\\n 合理分段。',
-    '5. category：必须从 ["澳洲要闻", "国际热点", "经济科技", "社会生活"] 中选择最匹配的一项。',
+    '5. category：必须从 ["澳洲要闻", "国际热点", "财经市场", "科技前沿", "社会生活"] 中选择最匹配的一项。「财经市场」仅限股市大盘/ASX/美股/上市公司财报/股价评级/Fed与RBA利率通胀/外汇与黄金原油铁矿石锂矿大宗商品交易；超市开店诉讼、个人家庭理财建议、非金融黑客/行政新闻严禁归入「财经市场」。',
     '6. matched_cluster_id：如果与下方「近24小时已入库主新闻列表」中的某一条报道的是完全相同的具体事件，填入其整数 id；否则填 null。',
     '',
     '【近24小时已入库主新闻列表】',

@@ -41,16 +41,36 @@ declare global {
 
 const VALID_CATEGORY_SET = new Set<string>(NEWS_CATEGORIES);
 
+const FINANCE_SOURCE_IDS = new Set<string>([
+  'asx-smallcaps',
+  'cnbc-investing',
+  'cnbc-markets',
+  'marketwatch-live',
+  'seeking-alpha',
+  'cnbc-top',
+  'cnbc-finance',
+  'marketwatch',
+]);
+
 const LEGACY_CATEGORY_MAP: Record<string, NewsCategory> = {
   全澳要闻: '澳洲要闻',
   悉尼新州: '澳洲要闻',
-  经济房产: '经济科技',
+  经济房产: '财经市场',
+  经济科技: '财经市场',
   科技社会: '社会生活',
 };
 
-export function normalizeCategory(raw: string | null | undefined): NewsCategory {
-  if (!raw) return '澳洲要闻';
+export function normalizeCategory(
+  raw: string | null | undefined,
+  sourceId?: string | null
+): NewsCategory {
+  if (!raw) {
+    if (sourceId && FINANCE_SOURCE_IDS.has(sourceId)) return '财经市场';
+    if (sourceId === 'techcrunch') return '科技前沿';
+    return '澳洲要闻';
+  }
   if (VALID_CATEGORY_SET.has(raw)) return raw as NewsCategory;
+  if (raw === '经济科技' && sourceId === 'techcrunch') return '科技前沿';
   return LEGACY_CATEGORY_MAP[raw] ?? '澳洲要闻';
 }
 
@@ -162,7 +182,27 @@ function initializeSchema(db: Database): void {
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_articles_cluster_id ON articles (cluster_id)`);
 
-  // Migrate legacy Phase 1 category names seamlessly without losing historical articles
+  // Lossless historical category migrations (preserve all existing rows & translations)
+  // 1. Only migrate pure market/trading sources from legacy categories into 财经市场
+  db.run(
+    `UPDATE articles SET category = '财经市场'
+     WHERE source_id IN ('asx-smallcaps', 'cnbc-investing', 'cnbc-markets', 'marketwatch-live', 'seeking-alpha', 'cnbc-top', 'cnbc-finance')
+       AND category IN ('经济科技', '经济房产')`
+  );
+
+  // 2. Existing TechCrunch or AI/tech articles previously labeled 经济科技 -> 科技前沿
+  db.run(
+    `UPDATE articles SET category = '科技前沿'
+     WHERE category = '经济科技'
+       AND (
+         source_id = 'techcrunch'
+         OR zh_title LIKE '%AI%' OR zh_title LIKE '%人工智能%' OR zh_title LIKE '%芯片%'
+         OR zh_title LIKE '%科技%' OR zh_title LIKE '%机器人%' OR zh_title LIKE '%数据中心%'
+         OR original_title LIKE '%AI%' OR original_title LIKE '%Nvidia%' OR original_title LIKE '%Anthropic%'
+       )`
+  );
+
+  // 3. Map all remaining legacy categories seamlessly
   for (const [legacy, modern] of Object.entries(LEGACY_CATEGORY_MAP)) {
     db.run(`UPDATE articles SET category = ? WHERE category = ?`, [modern, legacy]);
   }
@@ -240,7 +280,7 @@ function mapRowToNewsItem(row: Record<string, unknown>): NewsItem {
     zh_summary: String(row.zh_summary),
     zh_key_points: parseKeyPoints(row.zh_key_points),
     zh_content: String(row.zh_content),
-    category: normalizeCategory(String(row.category)),
+    category: normalizeCategory(String(row.category), String(row.source_id)),
     image_url: row.image_url ? String(row.image_url) : null,
     author: row.author ? String(row.author) : null,
     published_at: String(row.published_at),
@@ -292,7 +332,7 @@ export async function getRecentLeadArticles(
     id: Number(row.id),
     zh_title: String(row.zh_title),
     source_name: String(row.source_name),
-    category: normalizeCategory(String(row.category)),
+    category: normalizeCategory(String(row.category), String(row.source_id)),
   }));
 }
 
@@ -511,6 +551,14 @@ export async function queryArticles(options: {
     total: filtered.length,
     categoryCounts,
   };
+}
+
+export async function getArticleById(id: number): Promise<NewsItem | null> {
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const db = await getDb();
+  const rows = selectAll(db, `SELECT * FROM articles WHERE id = ? LIMIT 1`, [id]);
+  if (rows.length === 0) return null;
+  return mapRowToNewsItem(rows[0]);
 }
 
 export async function getTotalArticleCount(): Promise<number> {

@@ -25,22 +25,54 @@ import type { NewsItem } from '@/types/news';
 
 interface ArticleDetailProps {
   article: NewsItem | null;
+  initialSubArticleId?: number | null;
   showEnglishOriginal: boolean;
   onToggleEnglishOriginal: () => void;
   showBackButton?: boolean;
   onBack?: () => void;
   backButtonRef?: RefObject<HTMLButtonElement | null>;
   scrollContainerRef?: RefObject<HTMLElement | null>;
+  onNotify?: (text: string, type?: 'success' | 'error') => void;
+}
+
+async function copyTextWithFallback(text: string): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fallback to execCommand below (e.g. non-HTTPS LAN or restricted WebViews like WeChat)
+    }
+  }
+  if (typeof document !== 'undefined') {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+      document.body.appendChild(textarea);
+      textarea.select();
+      textarea.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy');
+      textarea.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 export function ArticleDetail({
   article,
+  initialSubArticleId = null,
   showEnglishOriginal,
   onToggleEnglishOriginal,
   showBackButton = false,
   onBack,
   backButtonRef,
   scrollContainerRef,
+  onNotify,
 }: ArticleDetailProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [imgFailed, setImgFailed] = useState(false);
@@ -55,14 +87,6 @@ export function ArticleDetail({
     restDelta: 0.001,
   });
 
-  // Reset selected source tab and scroll progress when switching to a different topic
-  useEffect(() => {
-    setActiveIndex(0);
-    setImgFailed(false);
-    setCopied(false);
-    rawProgress.set(0);
-  }, [article?.id, rawProgress]);
-
   const clusterMembers = useMemo(() => {
     if (!article) return [];
     if (article.related_articles && article.related_articles.length > 1) {
@@ -70,6 +94,19 @@ export function ArticleDetail({
     }
     return [article];
   }, [article]);
+
+  // Reset selected source tab (or jump directly to deep-linked child article tab) when topic changes
+  useEffect(() => {
+    if (initialSubArticleId && clusterMembers.length > 1) {
+      const matchedIdx = clusterMembers.findIndex((m) => m.id === initialSubArticleId);
+      setActiveIndex(matchedIdx >= 0 ? matchedIdx : 0);
+    } else {
+      setActiveIndex(0);
+    }
+    setImgFailed(false);
+    setCopied(false);
+    rawProgress.set(0);
+  }, [article?.id, initialSubArticleId, clusterMembers, rawProgress]);
 
   const currentArticle = clusterMembers[activeIndex] ?? article;
 
@@ -144,22 +181,35 @@ export function ArticleDetail({
   };
 
   const handleShare = async () => {
-    try {
-      if (typeof navigator !== 'undefined' && navigator.share) {
+    const shareUrl = `${window.location.origin}/?article=${currentArticle.id}`;
+
+    // 1. Prefer native Web Share API with our own site's deep link (not external media URL)
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
         await navigator.share({
           title: currentArticle.zh_title,
           text: currentArticle.zh_summary,
-          url: currentArticle.original_url,
+          url: shareUrl,
         });
         return;
+      } catch (err) {
+        // User intentionally dismissed the OS share sheet — ignore silently
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return;
+        }
+        // Other errors (e.g. WeChat WebView or unsupported context) fall through to clipboard copy
       }
-      await navigator.clipboard.writeText(
-        `${currentArticle.zh_title}\n${currentArticle.zh_summary}\n${currentArticle.original_url}`
-      );
+    }
+
+    // 2. Fallback: copy "【中文标题】\n深层链接" to clipboard and show friendly Toast
+    const shareText = `【${currentArticle.zh_title}】\n${shareUrl}`;
+    const ok = await copyTextWithFallback(shareText);
+    if (ok) {
       setCopied(true);
+      onNotify?.('已复制文章链接，可直接粘贴发送', 'success');
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // User cancelled share sheet or clipboard denied
+    } else {
+      onNotify?.('复制失败，请手动复制浏览器地址栏链接', 'error');
     }
   };
 

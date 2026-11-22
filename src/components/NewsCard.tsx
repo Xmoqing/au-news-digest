@@ -39,6 +39,7 @@ export function NewsCard({ item, index, isSelected, onSelect }: NewsCardProps) {
 
   return (
     <motion.article
+      data-article-id={item.id}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{

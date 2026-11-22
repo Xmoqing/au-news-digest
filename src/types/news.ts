@@ -1,9 +1,10 @@
-export type NewsCategory = '澳洲要闻' | '国际热点' | '经济科技' | '社会生活';
+export type NewsCategory = '澳洲要闻' | '国际热点' | '财经市场' | '科技前沿' | '社会生活';
 
 export const NEWS_CATEGORIES: readonly NewsCategory[] = [
   '澳洲要闻',
   '国际热点',
-  '经济科技',
+  '财经市场',
+  '科技前沿',
   '社会生活',
 ] as const;
 
@@ -21,12 +22,23 @@ export type SourceId =
   | 'guardian-au'
   | 'sbs-news'
   | 'smh-sydney'
+  | 'asx-smallcaps'
   | 'bbc-world'
   | 'guardian-world'
   | 'aljazeera'
-  | 'cnbc-top'
+  | 'npr-news'
   | 'techcrunch'
-  | 'npr-news';
+  | 'cnbc-investing'
+  | 'cnbc-markets'
+  | 'marketwatch-live'
+  | 'seeking-alpha'
+  // Legacy source IDs retained for lossless display of historical DB rows
+  | 'guardian-au-biz'
+  | 'smh-business'
+  | 'bbc-business'
+  | 'cnbc-top'
+  | 'cnbc-finance'
+  | 'marketwatch';
 
 export interface RssSource {
   id: SourceId;
@@ -38,7 +50,7 @@ export interface RssSource {
 }
 
 export const RSS_SOURCES: readonly RssSource[] = [
-  // Australian sources (4)
+  // Australian General & Macro News (6)
   {
     id: 'abc-au',
     name: 'ABC News Australia',
@@ -53,6 +65,14 @@ export const RSS_SOURCES: readonly RssSource[] = [
     shortName: 'ABC NSW',
     region: 'au',
     url: 'https://www.abc.net.au/news/feed/52498/rss.xml',
+    defaultCategory: '澳洲要闻',
+  },
+  {
+    id: 'abc-business',
+    name: 'ABC News Business',
+    shortName: 'ABC Business',
+    region: 'au',
+    url: 'https://www.abc.net.au/news/feed/51892/rss.xml',
     defaultCategory: '澳洲要闻',
   },
   {
@@ -79,15 +99,49 @@ export const RSS_SOURCES: readonly RssSource[] = [
     url: 'https://www.smh.com.au/rss/feed.xml',
     defaultCategory: '澳洲要闻',
   },
+  // Pure Stocks, Equities & Trading Markets (5)
   {
-    id: 'abc-business',
-    name: 'ABC News Business',
-    shortName: 'ABC Business',
+    id: 'asx-smallcaps',
+    name: 'ASX Markets (Small Caps)',
+    shortName: 'ASX Markets',
     region: 'au',
-    url: 'https://www.abc.net.au/news/feed/51892/rss.xml',
-    defaultCategory: '经济科技',
+    url: 'https://smallcaps.com.au/feed/',
+    defaultCategory: '财经市场',
   },
-  // Global sources (6)
+  {
+    id: 'cnbc-investing',
+    name: 'CNBC Investing',
+    shortName: 'CNBC Investing',
+    region: 'global',
+    url: 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069',
+    defaultCategory: '财经市场',
+  },
+  {
+    id: 'cnbc-markets',
+    name: 'CNBC Markets',
+    shortName: 'CNBC Markets',
+    region: 'global',
+    url: 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258',
+    defaultCategory: '财经市场',
+  },
+  {
+    id: 'marketwatch-live',
+    name: 'MarketWatch Live',
+    shortName: 'MarketWatch Live',
+    region: 'global',
+    // Dow Jones froze mw_realtimeheadlines in Jun 2025; mw_bulletins is MarketWatch's active live wire
+    url: 'https://feeds.content.dowjones.io/public/rss/mw_bulletins',
+    defaultCategory: '财经市场',
+  },
+  {
+    id: 'seeking-alpha',
+    name: 'Seeking Alpha',
+    shortName: 'Seeking Alpha',
+    region: 'global',
+    url: 'https://seekingalpha.com/market_currents.xml',
+    defaultCategory: '财经市场',
+  },
+  // Global News & Frontier Tech (5)
   {
     id: 'bbc-world',
     name: 'BBC World News',
@@ -113,12 +167,12 @@ export const RSS_SOURCES: readonly RssSource[] = [
     defaultCategory: '国际热点',
   },
   {
-    id: 'cnbc-top',
-    name: 'CNBC Top News',
-    shortName: 'CNBC',
+    id: 'npr-news',
+    name: 'NPR News',
+    shortName: 'NPR News',
     region: 'global',
-    url: 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114',
-    defaultCategory: '经济科技',
+    url: 'https://feeds.npr.org/1001/rss.xml',
+    defaultCategory: '国际热点',
   },
   {
     id: 'techcrunch',
@@ -126,15 +180,7 @@ export const RSS_SOURCES: readonly RssSource[] = [
     shortName: 'TechCrunch',
     region: 'global',
     url: 'https://techcrunch.com/feed/',
-    defaultCategory: '经济科技',
-  },
-  {
-    id: 'npr-news',
-    name: 'NPR News',
-    shortName: 'NPR News',
-    region: 'global',
-    url: 'https://feeds.npr.org/1001/rss.xml',
-    defaultCategory: '国际热点',
+    defaultCategory: '科技前沿',
   },
 ] as const;
 

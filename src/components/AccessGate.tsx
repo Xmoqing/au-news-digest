@@ -6,7 +6,11 @@ import { Eye, EyeOff, Globe2, Lock } from 'lucide-react';
 
 const AUTH_STORAGE_KEY = 'au-news-auth-verified-at';
 
-export function AccessGate() {
+interface AccessGateProps {
+  hasDeepLinkArticle?: boolean;
+}
+
+export function AccessGate({ hasDeepLinkArticle = false }: AccessGateProps) {
   const router = useRouter();
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -119,8 +123,10 @@ export function AccessGate() {
             {submitting ? '正在验证...' : '验证并进入'}
           </button>
 
-          <p className="text-center text-xs leading-relaxed text-ink-muted">
-            验证通过后将在本设备自动记住 30 天，下次打开免输入。
+          <p className="text-center text-xs leading-relaxed text-slate-500 dark:text-zinc-400">
+            {hasDeepLinkArticle
+              ? '验证通过后将直接为您打开分享的这篇文章，并在本设备自动记住 30 天。'
+              : '验证通过后将在本设备自动记住 30 天，下次打开免输入。'}
           </p>
         </form>
       </section>
