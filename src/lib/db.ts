@@ -452,18 +452,30 @@ function buildClusteredTopics(allArticles: NewsItem[]): NewsItem[] {
   const byId = new Map<number, NewsItem>(allArticles.map((a) => [a.id, a]));
   const clusterGroups = new Map<number, NewsItem[]>();
 
-  for (const article of allArticles) {
-    // Resolve canonical root ID (fallback to self if parent lead was pruned or missing)
-    const rootId =
-      article.cluster_id !== null &&
-      article.cluster_id !== article.id &&
-      byId.has(article.cluster_id)
-        ? article.cluster_id
-        : article.id;
+  const resolveGroupKey = (article: NewsItem): number => {
+    let current = article;
+    const visited = new Set<number>([current.id]);
+    while (
+      current.cluster_id !== null &&
+      current.cluster_id !== current.id &&
+      !visited.has(current.cluster_id)
+    ) {
+      if (!byId.has(current.cluster_id)) {
+        // Parent lead sits outside this date window; still group same-day siblings under its cluster_id
+        return current.cluster_id;
+      }
+      visited.add(current.cluster_id);
+      current = byId.get(current.cluster_id)!;
+    }
+    return current.id;
+  };
 
-    const list = clusterGroups.get(rootId) ?? [];
+  for (const article of allArticles) {
+    const groupKey = resolveGroupKey(article);
+
+    const list = clusterGroups.get(groupKey) ?? [];
     list.push(article);
-    clusterGroups.set(rootId, list);
+    clusterGroups.set(groupKey, list);
   }
 
   const topics: Array<{ lead: NewsItem; latestTs: number }> = [];
@@ -499,6 +511,8 @@ function buildClusteredTopics(allArticles: NewsItem[]): NewsItem[] {
 export async function queryArticles(options: {
   category?: CategoryFilter;
   search?: string;
+  startIso?: string;
+  endIso?: string;
   limit?: number;
   offset?: number;
 }): Promise<{
@@ -507,18 +521,41 @@ export async function queryArticles(options: {
   categoryCounts: Record<CategoryFilter, number>;
 }> {
   const db = await getDb();
-  const limit = Math.min(Math.max(options.limit ?? 300, 1), 1000);
+  const limit = Math.min(Math.max(options.limit ?? 200, 1), 5000);
   const offset = Math.max(options.offset ?? 0, 0);
 
-  // Load up to 1000 recent raw rows and cluster cross-media reports into deduplicated topic cards
+  const whereClauses: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (options.startIso) {
+    whereClauses.push('published_at >= ?');
+    params.push(options.startIso);
+  }
+  if (options.endIso) {
+    whereClauses.push('published_at < ?');
+    params.push(options.endIso);
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+  // Index-backed query on published_at DESC (omitting bulky original_content unused by UI)
   const rawRows = selectAll(
     db,
-    `SELECT * FROM articles ORDER BY published_at DESC, id DESC LIMIT 1000`
+    `SELECT
+       id, original_url, source_id, source_name,
+       original_title, original_excerpt, '' AS original_content,
+       zh_title, zh_summary, zh_key_points, zh_content,
+       category, image_url, author, published_at, fetched_at,
+       ai_translated, cluster_id
+     FROM articles
+     ${whereSql}
+     ORDER BY published_at DESC, id DESC`,
+    params
   );
   const allItems = rawRows.map(mapRowToNewsItem);
   const allTopics = buildClusteredTopics(allItems);
 
-  // Compute deduplicated topic counts per category so tab badges match visible cards
+  // Strictly count deduplicated independent topics (1 per visible topic card; folded child reports excluded)
   const categoryCounts = Object.fromEntries(
     CATEGORY_FILTERS.map((cat) => [cat, 0])
   ) as Record<CategoryFilter, number>;
@@ -550,6 +587,108 @@ export async function queryArticles(options: {
     items: filtered.slice(offset, offset + limit),
     total: filtered.length,
     categoryCounts,
+  };
+}
+
+export async function getArticleDateBounds(): Promise<{
+  minPublishedAt: string | null;
+  maxPublishedAt: string | null;
+}> {
+  const db = await getDb();
+  const rows = selectAll(
+    db,
+    `SELECT MIN(published_at) AS min_pub, MAX(published_at) AS max_pub FROM articles`
+  );
+  return {
+    minPublishedAt: rows[0]?.min_pub ? String(rows[0].min_pub) : null,
+    maxPublishedAt: rows[0]?.max_pub ? String(rows[0].max_pub) : null,
+  };
+}
+
+/**
+ * Returns distinct local calendar dates (YYYY-MM-DD) that have articles in the database,
+ * computed accurately in the visitor's requested IANA time zone (or UTC offset fallback).
+ * Counts deduplicated independent topics per day (excluding folded cluster child rows).
+ */
+export async function getAvailableLocalDates(options?: {
+  timeZone?: string;
+  offsetMinutes?: number;
+}): Promise<{
+  timeZone: string;
+  dates: string[];
+  countsByDate: Record<string, number>;
+}> {
+  const db = await getDb();
+  const rows = selectAll(
+    db,
+    `SELECT id, cluster_id, published_at FROM articles ORDER BY published_at DESC, id DESC`
+  );
+
+  // Validate requested IANA timeZone, falling back gracefully
+  let formatter: Intl.DateTimeFormat | null = null;
+  let resolvedTimeZone = options?.timeZone?.trim() || 'Australia/Sydney';
+  try {
+    formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: resolvedTimeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+  } catch {
+    formatter = null;
+    resolvedTimeZone = 'UTC';
+  }
+
+  const formatToLocalDate = (iso: string): string | null => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return null;
+    if (formatter) {
+      // en-CA produces ISO YYYY-MM-DD directly
+      const formatted = formatter.format(d);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(formatted)) return formatted;
+    }
+    const offsetMin =
+      typeof options?.offsetMinutes === 'number' && Number.isFinite(options.offsetMinutes)
+        ? options.offsetMinutes
+        : 0;
+    // JS getTimezoneOffset() is (UTC - local) in minutes, so local = UTC - offsetMin
+    const shifted = new Date(d.getTime() - offsetMin * 60_000);
+    const y = shifted.getUTCFullYear();
+    const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(shifted.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  // Group deduplicated topic keys per local date
+  const topicsPerDate = new Map<string, Set<number>>();
+  for (const row of rows) {
+    const dateKey = formatToLocalDate(String(row.published_at));
+    if (!dateKey) continue;
+    const id = Number(row.id);
+    const rawCluster = row.cluster_id;
+    const groupKey =
+      rawCluster !== null && rawCluster !== undefined && Number.isFinite(Number(rawCluster))
+        ? Number(rawCluster)
+        : id;
+
+    let set = topicsPerDate.get(dateKey);
+    if (!set) {
+      set = new Set<number>();
+      topicsPerDate.set(dateKey, set);
+    }
+    set.add(groupKey);
+  }
+
+  const dates = Array.from(topicsPerDate.keys()).sort((a, b) => b.localeCompare(a));
+  const countsByDate: Record<string, number> = {};
+  for (const dateKey of dates) {
+    countsByDate[dateKey] = topicsPerDate.get(dateKey)?.size ?? 0;
+  }
+
+  return {
+    timeZone: resolvedTimeZone,
+    dates,
+    countsByDate,
   };
 }
 
@@ -626,6 +765,106 @@ export async function batchUpdateArticleCategories(
 
   persistDatabase(db, resolveDatabasePath());
   return applied;
+}
+
+export function getDatabaseDiskSizeBytes(dbPath = resolveDatabasePath()): number {
+  const candidates = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
+  let total = 0;
+  for (const filePath of candidates) {
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.isFile()) {
+        total += stat.size;
+      }
+    } catch {
+      // ignore missing sidecar files (-wal / -shm)
+    }
+  }
+  return total;
+}
+
+export interface StorageWatermarkResult {
+  triggered: boolean;
+  pruned: number;
+  sizeBeforeBytes: number;
+  sizeAfterBytes: number;
+  limitBytes: number;
+  targetBytes: number;
+}
+
+/**
+ * Storage-watermark rolling cleanup (default 10GB):
+ * NEVER deletes any article while total DB + WAL/SHM size is below `maxSizeBytes`.
+ * Once >= `maxSizeBytes`, deletes oldest articles in batches (500–1000 rows) ordered by
+ * `published_at ASC, id ASC` and runs `VACUUM` + atomic persist until disk usage drops
+ * below the 95% target watermark (e.g., 9.5GB for a 10GB limit).
+ */
+export async function enforceDatabaseSizeLimit(
+  maxSizeBytes: number,
+  batchSize = 500
+): Promise<StorageWatermarkResult> {
+  const dbPath = resolveDatabasePath();
+  const sizeBeforeBytes = getDatabaseDiskSizeBytes(dbPath);
+  const targetBytes = Math.floor(maxSizeBytes * 0.95);
+
+  if (sizeBeforeBytes < maxSizeBytes) {
+    return {
+      triggered: false,
+      pruned: 0,
+      sizeBeforeBytes,
+      sizeAfterBytes: sizeBeforeBytes,
+      limitBytes: maxSizeBytes,
+      targetBytes,
+    };
+  }
+
+  const db = await getDb();
+  const safeBatch = Math.min(Math.max(Math.floor(batchSize), 100), 1000);
+  let totalPruned = 0;
+  let currentSize = sizeBeforeBytes;
+
+  const MAX_ITERATIONS = 50;
+  for (let iter = 0; iter < MAX_ITERATIONS && currentSize > targetBytes; iter++) {
+    const countBefore = await getTotalArticleCount();
+    if (countBefore === 0) break;
+
+    db.run(
+      `DELETE FROM articles WHERE id IN (
+        SELECT id FROM articles ORDER BY published_at ASC, id ASC LIMIT ?
+      )`,
+      [safeBatch]
+    );
+    const countAfter = await getTotalArticleCount();
+    const deletedNow = Math.max(0, countBefore - countAfter);
+    if (deletedNow === 0) break;
+    totalPruned += deletedNow;
+
+    // Reclaim freed pages from SQLite binary and write compacted DB atomically
+    try {
+      db.run('VACUUM');
+    } catch {
+      try {
+        db.run('PRAGMA incremental_vacuum');
+      } catch {
+        // ignore if auto_vacuum is not enabled
+      }
+    }
+    persistDatabase(db, dbPath);
+    currentSize = getDatabaseDiskSizeBytes(dbPath);
+  }
+
+  console.log(
+    `[DB Storage] Watermark cleanup complete: pruned=${totalPruned}, size=${(sizeBeforeBytes / (1024 * 1024)).toFixed(2)}MB -> ${(currentSize / (1024 * 1024)).toFixed(2)}MB (limit=${(maxSizeBytes / (1024 * 1024 * 1024)).toFixed(2)}GB)`
+  );
+
+  return {
+    triggered: true,
+    pruned: totalPruned,
+    sizeBeforeBytes,
+    sizeAfterBytes: currentSize,
+    limitBytes: maxSizeBytes,
+    targetBytes,
+  };
 }
 
 export async function pruneOldArticles(keepLatest = 1000): Promise<number> {

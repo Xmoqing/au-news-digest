@@ -250,7 +250,12 @@ export interface FxRateInfo {
 export interface NewsListResponse {
   items: NewsItem[];
   total: number;
+  totalInDb?: number;
   categoryCounts: Record<CategoryFilter, number>;
+  dateBounds?: {
+    minPublishedAt: string | null;
+    maxPublishedAt: string | null;
+  };
   lastUpdated: string | null;
   lastRefreshSummary: string | null;
   hasGeminiKey: boolean;

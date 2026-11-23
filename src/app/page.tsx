@@ -2,7 +2,13 @@ import type { Metadata } from 'next';
 import { AccessGate } from '@/components/AccessGate';
 import { NewsDigestClient } from '@/components/NewsDigestClient';
 import { isAccessPasswordEnabled, isServerComponentAuthorized } from '@/lib/auth';
-import { getArticleById, getMeta, queryArticles } from '@/lib/db';
+import {
+  getArticleById,
+  getArticleDateBounds,
+  getMeta,
+  getTotalArticleCount,
+  queryArticles,
+} from '@/lib/db';
 import { getAudCnyRate } from '@/lib/fx';
 import { hasConfiguredGeminiKey } from '@/lib/gemini';
 import { getRefreshState } from '@/lib/ingest';
@@ -72,6 +78,22 @@ export async function generateMetadata({ searchParams }: HomePageProps): Promise
   };
 }
 
+function getServerLocalDayWindow(referenceDate: Date): {
+  dateStr: string;
+  startIso: string;
+  endIso: string;
+} {
+  const y = referenceDate.getFullYear();
+  const m = referenceDate.getMonth();
+  const d = referenceDate.getDate();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return {
+    dateStr: `${y}-${pad(m + 1)}-${pad(d)}`,
+    startIso: new Date(y, m, d, 0, 0, 0, 0).toISOString(),
+    endIso: new Date(y, m, d + 1, 0, 0, 0, 0).toISOString(),
+  };
+}
+
 export default async function HomePage({ searchParams }: HomePageProps) {
   const params = await searchParams;
   const parsedId = Number(params.article);
@@ -82,41 +104,61 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     return <AccessGate hasDeepLinkArticle={requestedArticleId !== null} />;
   }
 
-  const [{ items, total, categoryCounts }, lastUpdated, lastRefreshSummary, fxRate] =
-    await Promise.all([
-      queryArticles({ limit: 300 }),
-      getMeta('last_updated_at'),
-      getMeta('last_refresh_summary'),
-      getAudCnyRate(),
-    ]);
-
-  let resolvedItems = items;
+  let deepArticle = null;
   let resolvedArticleId: number | null = requestedArticleId;
   let archivedArticleNotice = false;
 
   if (requestedArticleId !== null) {
+    deepArticle = await getArticleById(requestedArticleId);
+    if (!deepArticle) {
+      archivedArticleNotice = true;
+      resolvedArticleId = null;
+    }
+  }
+
+  // Default to server-local "today", or the exact day of the deep-linked historical article
+  const initialWindow = getServerLocalDayWindow(
+    deepArticle ? new Date(deepArticle.published_at) : new Date()
+  );
+
+  const [
+    { items, total, categoryCounts },
+    dateBounds,
+    totalInDb,
+    lastUpdated,
+    lastRefreshSummary,
+    fxRate,
+  ] = await Promise.all([
+    queryArticles({
+      startIso: initialWindow.startIso,
+      endIso: initialWindow.endIso,
+      limit: 5000,
+    }),
+    getArticleDateBounds(),
+    getTotalArticleCount(),
+    getMeta('last_updated_at'),
+    getMeta('last_refresh_summary'),
+    getAudCnyRate(),
+  ]);
+
+  let resolvedItems = items;
+  if (deepArticle) {
     const foundInLoaded = items.some(
       (a) =>
-        a.id === requestedArticleId ||
-        a.related_articles?.some((r) => r.id === requestedArticleId)
+        a.id === deepArticle.id ||
+        a.related_articles?.some((r) => r.id === deepArticle.id)
     );
-
     if (!foundInLoaded) {
-      const deepArticle = await getArticleById(requestedArticleId);
-      if (deepArticle) {
-        resolvedItems = [deepArticle, ...items];
-      } else {
-        // Article was pruned after exceeding rolling storage limit
-        archivedArticleNotice = true;
-        resolvedArticleId = null;
-      }
+      resolvedItems = [deepArticle, ...items];
     }
   }
 
   const initialData: NewsListResponse = {
     items: resolvedItems,
     total,
+    totalInDb,
     categoryCounts,
+    dateBounds,
     lastUpdated,
     lastRefreshSummary,
     hasGeminiKey: hasConfiguredGeminiKey(),
@@ -129,7 +171,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   return (
     <NewsDigestClient
       initialData={initialData}
+      initialWindow={initialWindow}
       initialArticleId={resolvedArticleId}
+      initialArticlePublishedAt={deepArticle?.published_at ?? null}
       archivedArticleNotice={archivedArticleNotice}
     />
   );

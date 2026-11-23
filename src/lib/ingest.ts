@@ -1,9 +1,9 @@
 import {
+  enforceDatabaseSizeLimit,
   getExistingUrlStatus,
   getPendingUntranslatedArticles,
   getRecentLeadArticles,
   getTotalArticleCount,
-  pruneOldArticles,
   setMeta,
   upsertArticle,
 } from '@/lib/db';
@@ -29,7 +29,8 @@ declare global {
 
 const DEFAULT_MAX_ITEMS_PER_AU_FEED = 10;
 const DEFAULT_MAX_ITEMS_PER_GLOBAL_FEED = 12;
-const DEFAULT_MAX_STORED_ARTICLES = 1000;
+const DEFAULT_MAX_DB_SIZE_GB = 10;
+const BYTES_PER_GB = 1024 * 1024 * 1024;
 const EXTRACT_CONCURRENCY = 6;
 const TRANSLATE_BATCH_SIZE = 6;
 
@@ -51,12 +52,16 @@ export function getMaxItemsPerGlobalFeed(): number {
   return DEFAULT_MAX_ITEMS_PER_GLOBAL_FEED;
 }
 
-export function getMaxStoredArticles(): number {
-  const parsed = Number(process.env.MAX_STORED_ARTICLES);
-  if (Number.isFinite(parsed) && parsed >= 100 && parsed <= 5000) {
-    return Math.floor(parsed);
+export function getMaxDbSizeGb(): number {
+  const parsed = Number(process.env.MAX_DB_SIZE_GB);
+  if (Number.isFinite(parsed) && parsed > 0 && parsed <= 1000) {
+    return parsed;
   }
-  return DEFAULT_MAX_STORED_ARTICLES;
+  return DEFAULT_MAX_DB_SIZE_GB;
+}
+
+export function getMaxDbSizeBytes(): number {
+  return Math.floor(getMaxDbSizeGb() * BYTES_PER_GB);
 }
 
 export function getRefreshState(): RefreshState {
@@ -104,7 +109,8 @@ async function executeRefreshPipeline(reason: string): Promise<RefreshResult> {
   const hasGeminiKey = hasConfiguredGeminiKey();
   const maxAuPerFeed = getMaxItemsPerFeed();
   const maxGlobalPerFeed = getMaxItemsPerGlobalFeed();
-  const maxStored = getMaxStoredArticles();
+  const maxDbSizeGb = getMaxDbSizeGb();
+  const maxDbSizeBytes = getMaxDbSizeBytes();
   const feedErrors: string[] = [];
 
   setRefreshState({
@@ -119,7 +125,7 @@ async function executeRefreshPipeline(reason: string): Promise<RefreshResult> {
   });
 
   console.log(
-    `[Ingest] Starting refresh (${reason}), auPerFeed=${maxAuPerFeed}, globalPerFeed=${maxGlobalPerFeed}, maxStored=${maxStored}, gemini=${hasGeminiKey}, primaryModel=${getGeminiModel()}`
+    `[Ingest] Starting refresh (${reason}), auPerFeed=${maxAuPerFeed}, globalPerFeed=${maxGlobalPerFeed}, maxDbSizeGb=${maxDbSizeGb}, gemini=${hasGeminiKey}, primaryModel=${getGeminiModel()}`
   );
 
   try {
@@ -337,7 +343,8 @@ async function executeRefreshPipeline(reason: string): Promise<RefreshResult> {
       }
     }
 
-    await pruneOldArticles(maxStored);
+    // Storage-watermark cleanup: retain 100% of historical news until total DB size reaches MAX_DB_SIZE_GB (default 10GB)
+    await enforceDatabaseSizeLimit(maxDbSizeBytes, 500);
 
     const finishedAt = new Date().toISOString();
     const totalInDb = await getTotalArticleCount();

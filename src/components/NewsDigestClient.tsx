@@ -12,6 +12,7 @@ import { useRouter } from 'next/navigation';
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import {
   AlertCircle,
+  CalendarDays,
   Globe2,
   LogOut,
   RefreshCw,
@@ -19,6 +20,7 @@ import {
   Tags,
   X,
 } from 'lucide-react';
+import { AppleDatePicker } from '@/components/AppleDatePicker';
 import { ArticleDetail } from '@/components/ArticleDetail';
 import { FxConverterBadge } from '@/components/FxConverterBadge';
 import { NewsCard } from '@/components/NewsCard';
@@ -33,10 +35,52 @@ import {
   type RefreshState,
 } from '@/types/news';
 
+interface DateWindowInfo {
+  dateStr: string;
+  startIso: string;
+  endIso: string;
+}
+
 interface NewsDigestClientProps {
   initialData: NewsListResponse;
+  initialWindow: DateWindowInfo;
   initialArticleId?: number | null;
+  initialArticlePublishedAt?: string | null;
   archivedArticleNotice?: boolean;
+}
+
+function formatLocalDateStr(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function getBrowserDayWindow(dateStr: string): DateWindowInfo {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
+    const now = new Date();
+    return getBrowserDayWindow(formatLocalDateStr(now));
+  }
+  return {
+    dateStr,
+    startIso: new Date(y, m - 1, d, 0, 0, 0, 0).toISOString(),
+    endIso: new Date(y, m - 1, d + 1, 0, 0, 0, 0).toISOString(),
+  };
+}
+
+function shiftDateStr(dateStr: string, deltaDays: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
+    return dateStr;
+  }
+  return formatLocalDateStr(new Date(y, m - 1, d + deltaDays));
+}
+
+function formatShortDateLabel(dateStr: string): string {
+  const parts = dateStr.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return dateStr;
+  return `${parts[1]}月${parts[2]}日`;
 }
 
 type FontSizeLevel = 'standard' | 'large' | 'xlarge';
@@ -51,16 +95,22 @@ const FONT_SIZE_LABELS: Record<FontSizeLevel, string> = {
 
 const ENGLISH_TOGGLE_STORAGE_KEY = 'au-news-show-english-original';
 const FONT_SIZE_STORAGE_KEY = 'au-news-font-size';
+const INITIAL_VISIBLE_COUNT = 200;
+const LOAD_MORE_STEP = 200;
 
 export function NewsDigestClient({
   initialData,
+  initialWindow,
   initialArticleId = null,
+  initialArticlePublishedAt = null,
   archivedArticleNotice = false,
 }: NewsDigestClientProps) {
   const router = useRouter();
 
   const [items, setItems] = useState<NewsItem[]>(initialData.items);
   const [categoryCounts, setCategoryCounts] = useState(initialData.categoryCounts);
+  const [availableDates, setAvailableDates] = useState<Set<string>>(() => new Set());
+  const [countsByDate, setCountsByDate] = useState<Record<string, number>>({});
   const [lastUpdated, setLastUpdated] = useState<string | null>(initialData.lastUpdated);
   const [hasGeminiKey, setHasGeminiKey] = useState<boolean>(initialData.hasGeminiKey);
   const [fxRate, setFxRate] = useState<FxRateInfo | null>(initialData.fxRate);
@@ -68,9 +118,18 @@ export function NewsDigestClient({
   const [refreshPulseCount, setRefreshPulseCount] = useState(0);
   const authEnabled = initialData.authEnabled;
 
+  // Visitor local-timezone date filtering (automatically adapts to Sydney, Beijing, etc.)
+  const [todayDateStr, setTodayDateStr] = useState<string>(initialWindow.dateStr);
+  const [selectedDate, setSelectedDate] = useState<string>(initialWindow.dateStr);
+  const [visitorTimeZone, setVisitorTimeZone] = useState<string>('');
+  const [isLoadingDate, setIsLoadingDate] = useState<boolean>(false);
+
+  const yesterdayDateStr = useMemo(() => shiftDateStr(todayDateStr, -1), [todayDateStr]);
+
   const [activeCategory, setActiveCategory] = useState<CategoryFilter>('全部');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [visibleCount, setVisibleCount] = useState<number>(INITIAL_VISIBLE_COUNT);
 
   // Elder-friendly font size toggle (standard / large / xlarge)
   const [fontSize, setFontSize] = useState<FontSizeLevel>('standard');
@@ -126,8 +185,14 @@ export function NewsDigestClient({
   const leftListScrollerRef = useRef<HTMLElement | null>(null);
   const desktopDetailScrollerRef = useRef<HTMLElement | null>(null);
   const mobileDetailScrollerRef = useRef<HTMLDivElement | null>(null);
+  const selectedDateRef = useRef<string>(initialWindow.dateStr);
+  const dateRequestSeqRef = useRef<number>(0);
   const lastProgressCurrentRef = useRef<number>(0);
   const deepLinkScrolledRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    selectedDateRef.current = selectedDate;
+  }, [selectedDate]);
 
   // Restore user preferences from localStorage (English toggle + elder font size)
   useEffect(() => {
@@ -261,26 +326,145 @@ export function NewsDigestClient({
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const fetchLatestNews = useCallback(async () => {
+  const fetchAvailableDates = useCallback(async () => {
     try {
-      const res = await fetch('/api/news?limit=300', { cache: 'no-store' });
-      if (res.status === 401) {
-        router.refresh();
-        return;
-      }
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      const offset = new Date().getTimezoneOffset();
+      const params = new URLSearchParams({ offset: String(offset) });
+      if (tz) params.set('tz', tz);
+      const res = await fetch(`/api/available-dates?${params.toString()}`, {
+        cache: 'no-store',
+      });
       if (!res.ok) return;
-      const data = (await res.json()) as NewsListResponse;
-      setItems(data.items);
-      setCategoryCounts(data.categoryCounts);
-      setLastUpdated(data.lastUpdated);
-      setHasGeminiKey(data.hasGeminiKey);
-      if (data.fxRate) setFxRate(data.fxRate);
-      setIsRefreshing(data.refreshState.isRefreshing);
-      setRefreshStage(data.refreshState.progress?.stage ?? null);
+      const data = (await res.json()) as {
+        ok?: boolean;
+        dates?: string[];
+        countsByDate?: Record<string, number>;
+      };
+      if (data.ok && Array.isArray(data.dates)) {
+        setAvailableDates(new Set(data.dates));
+        setCountsByDate(data.countsByDate ?? {});
+      }
     } catch {
-      // silent retry on next user action
+      // ignore transient errors
     }
-  }, [router]);
+  }, []);
+
+  const fetchNewsForDate = useCallback(
+    async (
+      targetDateStr: string,
+      options?: { showLoading?: boolean; preserveArticleId?: number | null }
+    ) => {
+      const seq = ++dateRequestSeqRef.current;
+      const win = getBrowserDayWindow(targetDateStr);
+      if (options?.showLoading) {
+        setIsLoadingDate(true);
+      }
+      try {
+        const params = new URLSearchParams({
+          start: win.startIso,
+          end: win.endIso,
+          limit: '5000',
+        });
+        const res = await fetch(`/api/news?${params.toString()}`, { cache: 'no-store' });
+        if (res.status === 401) {
+          router.refresh();
+          return;
+        }
+        if (!res.ok) return;
+        const data = (await res.json()) as NewsListResponse;
+        if (seq !== dateRequestSeqRef.current) return; // Discard stale out-of-order response
+
+        setItems(data.items);
+        setCategoryCounts(data.categoryCounts);
+        setLastUpdated(data.lastUpdated);
+        setHasGeminiKey(data.hasGeminiKey);
+        if (data.fxRate) setFxRate(data.fxRate);
+        setIsRefreshing(data.refreshState.isRefreshing);
+        setRefreshStage(data.refreshState.progress?.stage ?? null);
+
+        if (options?.preserveArticleId) {
+          const matched = data.items.find(
+            (a) =>
+              a.id === options.preserveArticleId ||
+              a.related_articles?.some((r) => r.id === options.preserveArticleId)
+          );
+          if (matched) {
+            setSelectedId(matched.id);
+          }
+        }
+      } catch {
+        // silent retry on next user action
+      } finally {
+        if (options?.showLoading && seq === dateRequestSeqRef.current) {
+          setIsLoadingDate(false);
+        }
+      }
+    },
+    [router]
+  );
+
+  const fetchLatestNews = useCallback(async () => {
+    await Promise.all([
+      fetchNewsForDate(selectedDateRef.current, { showLoading: false }),
+      fetchAvailableDates(),
+    ]);
+  }, [fetchNewsForDate, fetchAvailableDates]);
+
+  // Detect visitor's true local timezone & "today" on client mount (Sydney, Beijing, etc.)
+  // Also loads available dates for calendar dot indicators and aligns deep links (?article=195)
+  useEffect(() => {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      setVisitorTimeZone(tz);
+    } catch {
+      // ignore
+    }
+
+    void fetchAvailableDates();
+
+    const browserToday = formatLocalDateStr(new Date());
+    setTodayDateStr(browserToday);
+
+    const targetDate =
+      initialArticleId && initialArticlePublishedAt
+        ? formatLocalDateStr(new Date(initialArticlePublishedAt))
+        : browserToday;
+
+    setSelectedDate(targetDate);
+    selectedDateRef.current = targetDate;
+
+    const browserWin = getBrowserDayWindow(targetDate);
+    if (
+      browserWin.startIso !== initialWindow.startIso ||
+      browserWin.endIso !== initialWindow.endIso
+    ) {
+      void fetchNewsForDate(targetDate, {
+        showLoading: true,
+        preserveArticleId: initialArticleId,
+      });
+    }
+  }, [
+    initialArticleId,
+    initialArticlePublishedAt,
+    initialWindow.startIso,
+    initialWindow.endIso,
+    fetchNewsForDate,
+    fetchAvailableDates,
+  ]);
+
+  const handleSelectDate = useCallback(
+    (nextDateStr: string) => {
+      if (!nextDateStr) return;
+      const clamped = nextDateStr > todayDateStr ? todayDateStr : nextDateStr;
+      setSelectedDate(clamped);
+      selectedDateRef.current = clamped;
+      setVisibleCount(INITIAL_VISIBLE_COUNT);
+      leftListScrollerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+      void fetchNewsForDate(clamped, { showLoading: true });
+    },
+    [todayDateStr, fetchNewsForDate]
+  );
 
   const refreshFxRate = useCallback(
     async (force = false) => {
@@ -365,6 +549,20 @@ export function NewsDigestClient({
     return () => window.clearTimeout(t);
   }, [toast]);
 
+  // Derive displayed badge counts directly from loaded deduplicated topic items so badge == actual cards 100%
+  const displayCategoryCounts = useMemo(() => {
+    const counts = Object.fromEntries(
+      CATEGORY_FILTERS.map((cat) => [cat, 0])
+    ) as Record<CategoryFilter, number>;
+    for (const item of items) {
+      if (item.category in counts) {
+        counts[item.category] += 1;
+      }
+      counts['全部'] += 1;
+    }
+    return counts;
+  }, [items]);
+
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return items.filter((item) => {
@@ -382,6 +580,26 @@ export function NewsDigestClient({
       );
     });
   }, [items, activeCategory, searchQuery]);
+
+  // Reset progressive list window when switching category or search filter
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE_COUNT);
+  }, [activeCategory, searchQuery]);
+
+  // Ensure deep-linked historical article beyond initial 200 slice is immediately visible & scrollable
+  useEffect(() => {
+    if (!initialArticleId || !selectedId) return;
+    const idx = filteredItems.findIndex((a) => a.id === selectedId);
+    if (idx >= visibleCount) {
+      setVisibleCount(idx + 20);
+    }
+  }, [initialArticleId, selectedId, filteredItems, visibleCount]);
+
+  const visibleItems = useMemo(
+    () => filteredItems.slice(0, visibleCount),
+    [filteredItems, visibleCount]
+  );
+  const remainingCount = Math.max(0, filteredItems.length - visibleItems.length);
 
   useEffect(() => {
     if (filteredItems.length === 0) return;
@@ -791,21 +1009,76 @@ export function NewsDigestClient({
               )}
             </AnimatePresence>
 
-            {/* Compact AUD / CNY Capsule Bar */}
-            {fxRate && (
-              <div className="border-t border-black/[0.06] px-3.5 py-1.5 dark:border-white/[0.08] md:px-5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <FxConverterBadge
-                    fxRate={fxRate}
-                    refreshing={fxRefreshing}
-                    onRefresh={() => void refreshFxRate(true)}
+            {/* Compact AUD / CNY Capsule + Apple Local-Timezone Date Switcher Bar */}
+            <div className="border-t border-black/[0.06] px-3.5 py-1.5 dark:border-white/[0.08] md:px-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  {fxRate && (
+                    <FxConverterBadge
+                      fxRate={fxRate}
+                      refreshing={fxRefreshing}
+                      onRefresh={() => void refreshFxRate(true)}
+                    />
+                  )}
+                  {fxRate && (
+                    <span className="hidden text-[11px] text-[#86868B] tabular-nums xl:inline">
+                      100 澳元 ≈ ¥{(fxRate.rate * 100).toFixed(1)}
+                    </span>
+                  )}
+                </div>
+
+                {/* Apple Segmented Date Selector: Today | Yesterday | Custom Apple Calendar Popover */}
+                <div
+                  role="group"
+                  aria-label="按本地日期筛选新闻"
+                  title={
+                    visitorTimeZone
+                      ? `自动按您设备所在时区（${visitorTimeZone}）筛选每日新闻`
+                      : '按设备本地时区筛选每日新闻'
+                  }
+                  className="ml-auto inline-flex items-center gap-0.5 rounded-full bg-black/[0.06] p-0.5 dark:bg-white/[0.08]"
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleSelectDate(todayDateStr)}
+                    aria-pressed={selectedDate === todayDateStr}
+                    className={[
+                      'inline-flex h-7 cursor-pointer items-center rounded-full px-2.5 text-xs font-medium transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]',
+                      selectedDate === todayDateStr
+                        ? 'bg-white font-semibold text-[#1D1D1F] shadow-sm dark:bg-[#2C2C2E] dark:text-[#F5F5F7] dark:shadow-none dark:ring-1 dark:ring-white/15'
+                        : 'text-[#86868B] hover:text-[#1D1D1F] dark:hover:text-[#F5F5F7]',
+                    ].join(' ')}
+                  >
+                    今天
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSelectDate(yesterdayDateStr)}
+                    aria-pressed={selectedDate === yesterdayDateStr}
+                    className={[
+                      'inline-flex h-7 cursor-pointer items-center rounded-full px-2.5 text-xs font-medium transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]',
+                      selectedDate === yesterdayDateStr
+                        ? 'bg-white font-semibold text-[#1D1D1F] shadow-sm dark:bg-[#2C2C2E] dark:text-[#F5F5F7] dark:shadow-none dark:ring-1 dark:ring-white/15'
+                        : 'text-[#86868B] hover:text-[#1D1D1F] dark:hover:text-[#F5F5F7]',
+                    ].join(' ')}
+                  >
+                    昨天
+                  </button>
+
+                  <AppleDatePicker
+                    selectedDate={selectedDate}
+                    todayDate={todayDateStr}
+                    yesterdayDate={yesterdayDateStr}
+                    availableDates={availableDates}
+                    countsByDate={countsByDate}
+                    visitorTimeZone={visitorTimeZone}
+                    onSelectDate={handleSelectDate}
+                    onOpen={() => void fetchAvailableDates()}
                   />
-                  <span className="text-[11px] text-[#86868B] tabular-nums">
-                    100 澳元 ≈ ¥{(fxRate.rate * 100).toFixed(1)} · 点击汇率打开双向换算
-                  </span>
                 </div>
               </div>
-            )}
+            </div>
 
             {/* Single-row Category Tabs with iOS Segmented Control Solid Spring Capsule */}
             <div className="border-t border-black/[0.06] px-3 py-1.5 dark:border-white/[0.08] md:px-4">
@@ -817,7 +1090,7 @@ export function NewsDigestClient({
               >
                 {CATEGORY_FILTERS.map((cat, idx) => {
                   const selected = activeCategory === cat;
-                  const count = categoryCounts[cat] ?? 0;
+                  const count = displayCategoryCounts[cat] ?? categoryCounts[cat] ?? 0;
                   return (
                     <button
                       key={cat}
@@ -919,34 +1192,73 @@ export function NewsDigestClient({
               aria-labelledby={`tab-${activeCategory}`}
               className="pane-scroller bg-transparent md:h-full md:overflow-y-auto md:border-r md:border-black/[0.08] dark:md:border-white/[0.08]"
             >
-              {filteredItems.length === 0 ? (
+              {isLoadingDate ? (
+                <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
+                  <RefreshCw
+                    className="mb-3 h-5 w-5 animate-spin text-[#007AFF] dark:text-[#0A84FF]"
+                    aria-hidden="true"
+                  />
+                  <p className="text-sm font-medium text-[#1D1D1F] dark:text-[#F5F5F7]">
+                    正在加载 {selectedDate === todayDateStr ? '今日' : selectedDate === yesterdayDateStr ? '昨日' : formatShortDateLabel(selectedDate)} 新闻...
+                  </p>
+                </div>
+              ) : filteredItems.length === 0 ? (
                 <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
                   <p className="text-sm font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">
                     {isRefreshing
                       ? '正在从澳洲与国际主流媒体拉取最新资讯...'
                       : searchQuery
-                        ? '未找到匹配的新闻'
-                        : '该分类下暂无新闻'}
+                        ? '当前日期下未找到匹配的新闻'
+                        : selectedDate === todayDateStr
+                          ? activeCategory === '全部'
+                            ? '今日暂无新动态，可切换查看昨日新闻'
+                            : `今日「${activeCategory}」暂无新动态`
+                          : `${selectedDate === yesterdayDateStr ? '昨日' : formatShortDateLabel(selectedDate)}暂无该分类归档新闻`}
                   </p>
                   <p className="mt-1.5 text-xs text-[#86868B]">
                     {isRefreshing
                       ? refreshStage || '请稍候片刻'
-                      : '点击右上角「刷新」立即拉取最新澳洲与国际热点'}
+                      : selectedDate === todayDateStr
+                        ? '本地时间凌晨刚过时媒体可能尚未发新稿，您可以先浏览昨日精选或手动刷新'
+                        : '您可以切换顶部日期选择器查看其他日期的历史新闻'}
                   </p>
                   {!isRefreshing && !searchQuery && (
-                    <button
-                      type="button"
-                      onClick={handleManualRefresh}
-                      className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-[#007AFF] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#0071E3] active:scale-[0.98] dark:bg-[#0A84FF] dark:hover:bg-[#409CFF]"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>立即拉取新闻</span>
-                    </button>
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                      {selectedDate === todayDateStr ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleSelectDate(yesterdayDateStr)}
+                            className="inline-flex items-center gap-1.5 rounded-full bg-[#007AFF] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#0071E3] active:scale-[0.98] dark:bg-[#0A84FF] dark:hover:bg-[#409CFF]"
+                          >
+                            <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>查看昨日新闻</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleManualRefresh}
+                            className="inline-flex items-center gap-1.5 rounded-full bg-black/[0.06] px-4 py-2 text-xs font-medium text-[#1D1D1F] transition-colors hover:bg-black/[0.10] active:scale-[0.98] dark:bg-white/[0.08] dark:text-[#F5F5F7] dark:hover:bg-white/[0.14]"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>立即拉取新闻</span>
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleSelectDate(todayDateStr)}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-[#007AFF] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#0071E3] active:scale-[0.98] dark:bg-[#0A84FF] dark:hover:bg-[#409CFF]"
+                        >
+                          <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>返回今天</span>
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               ) : (
-                <div key={activeCategory} className="py-2">
-                  {filteredItems.map((item, idx) => (
+                <div key={`${selectedDate}-${activeCategory}`} className="py-2">
+                  {visibleItems.map((item, idx) => (
                     <NewsCard
                       key={item.id}
                       item={item}
@@ -955,6 +1267,27 @@ export function NewsDigestClient({
                       onSelect={handleSelectArticle}
                     />
                   ))}
+
+                  {remainingCount > 0 ? (
+                    <div className="px-3 pt-2 pb-5">
+                      <button
+                        type="button"
+                        onClick={() => setVisibleCount((prev) => prev + LOAD_MORE_STEP)}
+                        className="w-full rounded-full border border-black/[0.08] bg-white px-4 py-2.5 text-xs font-medium text-[#1D1D1F] transition-colors hover:bg-[#F2F2F7] active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] dark:border-white/[0.10] dark:bg-[#1C1C1E] dark:text-[#F5F5F7] dark:hover:bg-[#2C2C2E] tabular-nums"
+                      >
+                        加载更多新闻（已显示 {visibleItems.length} / 共 {filteredItems.length} 篇，还有 {remainingCount} 篇）
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="px-4 pt-2 pb-5 text-center text-[11px] text-[#86868B] tabular-nums">
+                      {selectedDate === todayDateStr
+                        ? '今日'
+                        : selectedDate === yesterdayDateStr
+                          ? '昨日'
+                          : formatShortDateLabel(selectedDate)}
+                      共 {filteredItems.length} 篇独立主题报道
+                    </p>
+                  )}
                 </div>
               )}
             </section>

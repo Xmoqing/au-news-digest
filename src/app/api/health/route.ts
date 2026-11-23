@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { isAccessPasswordEnabled } from '@/lib/auth';
-import { getMeta, getTotalArticleCount } from '@/lib/db';
+import { getDatabaseDiskSizeBytes, getMeta, getTotalArticleCount } from '@/lib/db';
 import { getGeminiModel, hasConfiguredGeminiKey } from '@/lib/gemini';
 import {
+  getMaxDbSizeGb,
   getMaxItemsPerFeed,
   getMaxItemsPerGlobalFeed,
-  getMaxStoredArticles,
 } from '@/lib/ingest';
 import { getCronSchedule } from '@/lib/scheduler';
 import { RSS_SOURCES } from '@/types/news';
@@ -19,10 +19,15 @@ export async function GET() {
       getMeta('last_updated_at'),
     ]);
 
+    const dbSizeBytes = getDatabaseDiskSizeBytes();
+    const maxDbSizeGb = getMaxDbSizeGb();
+
     return NextResponse.json({
       status: 'ok',
       totalArticles,
-      maxStoredArticles: getMaxStoredArticles(),
+      dbSizeBytes,
+      dbSizeMb: Number((dbSizeBytes / (1024 * 1024)).toFixed(2)),
+      maxDbSizeGb,
       maxItemsPerFeed: getMaxItemsPerFeed(),
       maxItemsPerGlobalFeed: getMaxItemsPerGlobalFeed(),
       sourceCount: RSS_SOURCES.length,
