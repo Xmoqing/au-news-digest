@@ -1165,7 +1165,7 @@ export function NewsDigestClient({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 8, scale: 0.96 }}
                 transition={{ type: 'spring', stiffness: 420, damping: 36, mass: 0.8 }}
-                className="pointer-events-none fixed bottom-6 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2"
+                className="pointer-events-none fixed inset-x-4 bottom-6 z-50 mx-auto max-w-md"
               >
                 <div
                   className={[

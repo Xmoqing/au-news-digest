@@ -197,7 +197,7 @@ export function AppleDatePicker({
           <AnimatePresence>
             {open && (
               <div className="fixed inset-0 z-50">
-                {/* Click-outside backdrop (soft dim on mobile, transparent on desktop) */}
+                {/* Click-outside backdrop (translucent blurred dim on mobile, transparent on desktop) */}
                 <motion.div
                   aria-hidden="true"
                   initial={{ opacity: 0 }}
@@ -205,10 +205,12 @@ export function AppleDatePicker({
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.16 }}
                   onClick={handleClose}
-                  className="fixed inset-0 bg-black/45 sm:bg-transparent"
+                  className="fixed inset-0 bg-black/50 backdrop-blur-sm sm:bg-transparent sm:backdrop-blur-none"
                 />
 
-                {/* Custom Apple Dark Glass Popover Calendar */}
+                {/* Custom Apple Dark Glass Popover Calendar
+                    - Mobile (< 640px): fixed inset-x-4 top-28 mx-auto max-w-[340px] (zero transform conflict with Framer Motion!)
+                    - Desktop (>= 640px): right-aligned to trigger button (origin-top-right) so it never clips right edge */}
                 <motion.div
                   ref={panelRef}
                   role="dialog"
@@ -228,10 +230,10 @@ export function AppleDatePicker({
                       : undefined
                   }
                   className={[
-                    'w-[min(19.5rem,calc(100vw-2rem))] rounded-2xl border border-white/15 bg-[#1C1C1E]/95 p-4 text-[#F5F5F7] shadow-2xl backdrop-blur-2xl saturate-150',
+                    'z-50 rounded-2xl border border-white/15 bg-[#1C1C1E]/95 p-4 text-[#F5F5F7] shadow-2xl backdrop-blur-2xl saturate-150',
                     desktopAnchor
-                      ? ''
-                      : 'fixed left-1/2 top-24 -translate-x-1/2',
+                      ? 'w-[312px] max-w-[calc(100vw-1.5rem)] origin-top-right'
+                      : 'fixed inset-x-4 top-28 mx-auto max-w-[340px] origin-top',
                   ].join(' ')}
                 >
                   {/* Month Navigation Header */}
@@ -301,7 +303,7 @@ export function AppleDatePicker({
                                   : `${cell.dateStr} · 暂无归档新闻`
                             }
                             className={[
-                              'relative flex h-9 w-9 flex-col items-center justify-center rounded-xl text-[13px] transition-all tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]',
+                              'relative flex h-9 w-full max-w-[2.25rem] flex-col items-center justify-center rounded-xl text-[13px] transition-all tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]',
                               isFuture
                                 ? 'cursor-not-allowed text-[#86868B]/30'
                                 : isSelected
