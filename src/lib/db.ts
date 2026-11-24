@@ -28,6 +28,7 @@ export interface UpsertArticleInput {
   fetched_at: string;
   ai_translated: boolean;
   cluster_id?: number | null;
+  increment_translate_attempts?: boolean;
 }
 
 declare global {
@@ -153,6 +154,7 @@ function initializeSchema(db: Database): void {
       published_at TEXT NOT NULL,
       fetched_at TEXT NOT NULL,
       ai_translated INTEGER NOT NULL DEFAULT 1,
+      translate_attempts INTEGER NOT NULL DEFAULT 0,
       cluster_id INTEGER
     );
 
@@ -180,7 +182,16 @@ function initializeSchema(db: Database): void {
     db.run(`ALTER TABLE articles ADD COLUMN cluster_id INTEGER`);
   }
 
+  if (!existingCols.has('translate_attempts')) {
+    console.log('[DB Migration] Adding missing column: articles.translate_attempts');
+    db.run(`ALTER TABLE articles ADD COLUMN translate_attempts INTEGER NOT NULL DEFAULT 0`);
+  }
+
   db.run(`CREATE INDEX IF NOT EXISTS idx_articles_cluster_id ON articles (cluster_id)`);
+  // Composite index for millisecond-fast recent-24h untranslated backfill (zero full-table scan)
+  db.run(
+    `CREATE INDEX IF NOT EXISTS idx_articles_untranslated_recent ON articles (ai_translated, translate_attempts, published_at DESC)`
+  );
 
   // Lossless historical category migrations (preserve all existing rows & translations)
   // 1. Only migrate pure market/trading sources from legacy categories into 财经市场
@@ -292,19 +303,20 @@ function mapRowToNewsItem(row: Record<string, unknown>): NewsItem {
 
 export async function getExistingUrlStatus(
   urls: string[]
-): Promise<Map<string, { ai_translated: boolean }>> {
-  const result = new Map<string, { ai_translated: boolean }>();
+): Promise<Map<string, { ai_translated: boolean; translate_attempts: number }>> {
+  const result = new Map<string, { ai_translated: boolean; translate_attempts: number }>();
   if (urls.length === 0) return result;
   const db = await getDb();
   const placeholders = urls.map(() => '?').join(',');
   const rows = selectAll(
     db,
-    `SELECT original_url, ai_translated FROM articles WHERE original_url IN (${placeholders})`,
+    `SELECT original_url, ai_translated, translate_attempts FROM articles WHERE original_url IN (${placeholders})`,
     urls
   );
   for (const row of rows) {
     result.set(String(row.original_url), {
       ai_translated: Number(row.ai_translated) === 1,
+      translate_attempts: Number(row.translate_attempts ?? 0),
     });
   }
   return result;
@@ -336,14 +348,48 @@ export async function getRecentLeadArticles(
   }));
 }
 
-export async function getPendingUntranslatedArticles(limit = 60): Promise<NewsItem[]> {
+/**
+ * High-performance indexed query for recent untranslated articles (default: last 24h, max 20 items, attempts < 3).
+ * Uses idx_articles_untranslated_recent so even a 10GB multi-year DB never performs a full-table scan.
+ */
+export async function getPendingUntranslatedArticles(
+  limit = 20,
+  hours = 24,
+  maxAttempts = 3
+): Promise<NewsItem[]> {
   const db = await getDb();
+  const safeLimit = Math.min(Math.max(Math.floor(limit), 1), 200);
+  const safeHours = Math.min(Math.max(hours, 1), 168);
+  const cutoffIso = new Date(Date.now() - safeHours * 60 * 60 * 1000).toISOString();
+
   const rows = selectAll(
     db,
-    `SELECT * FROM articles WHERE ai_translated = 0 ORDER BY published_at DESC LIMIT ?`,
-    [limit]
+    `SELECT * FROM articles
+     WHERE ai_translated = 0
+       AND translate_attempts < ?
+       AND published_at >= ?
+     ORDER BY published_at DESC, id DESC
+     LIMIT ?`,
+    [maxAttempts, cutoffIso, safeLimit]
   );
   return rows.map(mapRowToNewsItem);
+}
+
+export async function countRecentUntranslatedArticles(
+  hours = 24,
+  maxAttempts = 3
+): Promise<number> {
+  const db = await getDb();
+  const cutoffIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const rows = selectAll(
+    db,
+    `SELECT COUNT(*) AS count FROM articles
+     WHERE ai_translated = 0
+       AND translate_attempts < ?
+       AND published_at >= ?`,
+    [maxAttempts, cutoffIso]
+  );
+  return Number(rows[0]?.count ?? 0);
 }
 
 export async function upsertArticle(
@@ -355,6 +401,7 @@ export async function upsertArticle(
     typeof input.cluster_id === 'number' && Number.isFinite(input.cluster_id) && input.cluster_id > 0
       ? Math.floor(input.cluster_id)
       : null;
+  const attemptDelta = input.increment_translate_attempts ? 1 : 0;
 
   const existing = selectAll(
     db,
@@ -377,6 +424,7 @@ export async function upsertArticle(
         original_content = CASE WHEN length(?) > length(original_content) THEN ? ELSE original_content END,
         fetched_at = ?,
         ai_translated = ?,
+        translate_attempts = translate_attempts + ?,
         cluster_id = COALESCE(?, cluster_id)
       WHERE original_url = ?`,
       [
@@ -390,6 +438,7 @@ export async function upsertArticle(
         input.original_content,
         input.fetched_at,
         input.ai_translated ? 1 : 0,
+        attemptDelta,
         safeClusterId,
         input.original_url,
       ]
@@ -416,8 +465,9 @@ export async function upsertArticle(
       published_at,
       fetched_at,
       ai_translated,
+      translate_attempts,
       cluster_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.original_url,
       input.source_id,
@@ -435,6 +485,7 @@ export async function upsertArticle(
       input.published_at,
       input.fetched_at,
       input.ai_translated ? 1 : 0,
+      attemptDelta,
       clusterIdVal,
     ]
   );

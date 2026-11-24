@@ -36,10 +36,10 @@ const FALLBACK_MODELS = [
 ];
 
 const RECLASSIFY_MODELS = [
-  'gemini-3.8-flash',
   'gemini-flash-lite-latest',
   'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
+  'gemini-3.8-flash',
   'gemini-flash-latest',
 ];
 
@@ -314,8 +314,18 @@ function buildFallbackOutput(input: ArticleToTranslate, error?: string): Transla
   };
 }
 
+const RETRY_BACKOFF_MS = [5000, 10000] as const;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function isPermanentModelSkipError(errMsg: string): boolean {
-  return /404|NOT_FOUND|GenerateRequestsPerDay|PerDay|quota exceeded|RESOURCE_EXHAUSTED/i.test(
+  return /404|NOT_FOUND|GenerateRequestsPerDay|PerDay/i.test(errMsg);
+}
+
+function isTransientRetryableError(errMsg: string): boolean {
+  return /429|RESOURCE_EXHAUSTED|quota exceeded|rate limit|503|502|504|UNAVAILABLE|DEADLINE_EXCEEDED|timeout|timed out|ETIMEDOUT|ECONNRESET|fetch failed/i.test(
     errMsg
   );
 }
@@ -335,32 +345,58 @@ async function generateWithFallback(
 
   let lastError = 'Unknown Gemini error';
   for (const model of models) {
-    try {
-      const response = await client.models.generateContent({
-        model,
-        contents,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema,
-          temperature: options?.temperature ?? 0.25,
-        },
-      });
+    for (let attempt = 0; attempt <= RETRY_BACKOFF_MS.length; attempt++) {
+      try {
+        const response = await client.models.generateContent({
+          model,
+          contents,
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema,
+            temperature: options?.temperature ?? 0.25,
+          },
+        });
 
-      const rawText = response.text?.trim();
-      if (!rawText) {
-        throw new Error('Empty response text from Gemini');
+        const rawText = response.text?.trim();
+        if (!rawText) {
+          throw new Error('Empty response text from Gemini');
+        }
+        return { text: rawText, model };
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        lastError = `${model}: ${errMsg}`;
+
+        // Daily quota or 404: skip this model immediately without wasting backoff time
+        if (isPermanentModelSkipError(errMsg)) {
+          exhaustedModels.add(model);
+          console.warn(
+            `[Gemini] Model "${model}" permanently unavailable/daily quota reached, switching to fallback:`,
+            errMsg.slice(0, 220)
+          );
+          break;
+        }
+
+        // Transient 429 RPM / 503 / timeout: wait 5s -> 10s before retrying same model
+        if (isTransientRetryableError(errMsg) && attempt < RETRY_BACKOFF_MS.length) {
+          const waitMs = RETRY_BACKOFF_MS[attempt];
+          console.warn(
+            `[Gemini] Model "${model}" hit transient limit/timeout (attempt ${attempt + 1}/${RETRY_BACKOFF_MS.length + 1}), retrying in ${waitMs / 1000}s:`,
+            errMsg.slice(0, 180)
+          );
+          await sleep(waitMs);
+          continue;
+        }
+
+        // After exhausting retries on transient 429/quota, fall back to next model in chain
+        if (/429|RESOURCE_EXHAUSTED|quota exceeded/i.test(errMsg)) {
+          exhaustedModels.add(model);
+        }
+        console.warn(
+          `[Gemini] Model "${model}" failed after ${attempt + 1} attempt(s), trying fallback if available:`,
+          errMsg.slice(0, 240)
+        );
+        break;
       }
-      return { text: rawText, model };
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      lastError = `${model}: ${errMsg}`;
-      if (isPermanentModelSkipError(errMsg)) {
-        exhaustedModels.add(model);
-      }
-      console.warn(
-        `[Gemini] Model "${model}" failed, trying fallback if available:`,
-        errMsg.slice(0, 260)
-      );
     }
   }
 
@@ -437,7 +473,7 @@ export async function translateArticlesBatch(
       exhaustedModels
     );
 
-    const parsed = JSON.parse(text) as {
+    let parsed: {
       articles?: Array<{
         idx?: number;
         zh_title?: string;
@@ -449,6 +485,27 @@ export async function translateArticlesBatch(
         matched_batch_idx?: number | null;
       }>;
     };
+
+    try {
+      parsed = JSON.parse(text);
+      if (!parsed || !Array.isArray(parsed.articles) || parsed.articles.length === 0) {
+        throw new Error('Empty or invalid articles array in batch JSON response');
+      }
+    } catch (parseErr) {
+      // Fault isolation: if batch JSON parsing fails, fall back to translating each article individually
+      const parseMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      console.warn(
+        `[Gemini] Batch JSON parse failed (${inputs.length} articles via ${model}), degrading to per-article translation:`,
+        parseMsg.slice(0, 200)
+      );
+      const individualOutputs: TranslatedNewsOutput[] = [];
+      for (let i = 0; i < inputs.length; i++) {
+        if (i > 0) await sleep(1000);
+        const single = await translateAndSummarizeArticle(inputs[i], recentLeads, exhaustedModels);
+        individualOutputs.push(single);
+      }
+      return individualOutputs;
+    }
 
     const byIdx = new Map<number, NonNullable<typeof parsed.articles>[number]>();
     for (const row of parsed.articles ?? []) {
@@ -493,6 +550,7 @@ export async function translateArticlesBatch(
           model_used: model,
         });
       } else {
+        await sleep(1000);
         const single = await translateAndSummarizeArticle(input, recentLeads, exhaustedModels);
         outputs.push(single);
       }
@@ -506,6 +564,22 @@ export async function translateArticlesBatch(
       `[Gemini] Batch translation failed (${inputs.length} articles):`,
       errMsg.slice(0, 320)
     );
+
+    // If models are not all exhausted (e.g. single article triggered response error/truncation), isolate per-article
+    const remainingModels = getModelChain().filter((m) => !exhaustedModels.has(m));
+    if (inputs.length > 1 && remainingModels.length > 0) {
+      console.warn(
+        `[Gemini] Falling back to individual translation for ${inputs.length} articles to prevent batch-wide failure`
+      );
+      const individualOutputs: TranslatedNewsOutput[] = [];
+      for (let i = 0; i < inputs.length; i++) {
+        if (i > 0) await sleep(1000);
+        const single = await translateAndSummarizeArticle(inputs[i], recentLeads, exhaustedModels);
+        individualOutputs.push(single);
+      }
+      return individualOutputs;
+    }
+
     return inputs.map((item) => buildFallbackOutput(item, errMsg));
   }
 }

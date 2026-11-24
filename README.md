@@ -17,6 +17,7 @@
   - 可选配置环境变量 `ACCESS_PASSWORD`：未设置时保持免密访问；设置后首次访问弹出简洁口令框，验证通过后 HttpOnly Cookie 记住 30 天，并同步保护 `GET /api/news` 与 `POST /api/refresh` 防止外部恶意刷接口消耗 API 额度。
 - **实时澳元/人民币汇率胶囊 + 双向换算小工具**：通过 `/api/exchange-rate`（Frankfurter ECB 主源 + ExchangeRate-API 备用源，15 分钟内存缓存）展示 `🇦🇺 1 AUD ≈ ¥X.XXXX CNY`，点击胶囊展开双向澳元 ⇄ 人民币实时换算器。
 - **跨媒体智能主题合并（去重防刷屏）**：抓取编译时自动结合近 24 小时已入库主新闻上下文，由 Gemini 识别同一突发事件并归并至同一 `cluster_id`；目录仅展示主题主卡片并高亮「综合 N 家媒体报道」，详情页内可直接点击媒体 Tab 切换不同媒体的报道正文。
+- **防限流分批编译 + 24 小时索引漏翻补译 (`/api/translate-missing`)**：每批严格控制在 4 篇、批次间自动间隔 1.5 秒，遇 429/超时自动 `5s -> 10s` 退避重试，单批 JSON 解析失败自动降级逐篇编译防止连坐；定时刷新仅通过复合索引检索最近 24 小时内 `translate_attempts < 3` 的未译文章（每次最多 20 篇，零全表扫描），并支持访问 `/api/translate-missing?pwd=你的密码` 一键手动补译。
 - **历史文章分类一键校准 (`/api/reclassify-history`)**：支持在顶部工具栏点击「校准分类」图标按钮，或浏览器直接访问 `/api/reclassify-history?pwd=你的密码`（支持 `GET` / `POST`），按每批 50 篇将历史旧文章仅重新判定 `category` 字段写回 SQLite，不删除文章、不重新翻译正文。
 - **按访客本地时区日期筛选 + 10GB 存储水位线全量留存**：自动识别浏览者设备时区（悉尼看悉尼的今天、国内自动按北京时间判断今天），默认只展示当天新闻并支持「今天 / 昨天 / 任意历史日期」切换与分享深层链接自动定位；取消按条数删除，全量保留历史新闻，仅当 SQLite（含 `-wal`/`-shm`）总占用达到 `MAX_DB_SIZE_GB`（默认 `10` GB）时按时间分批淘汰最旧数据并执行 `VACUUM` 回落至 95% 水位以下。
 - **无损平滑数据库迁移**：启动时通过 `PRAGMA table_info(articles)` 安全检查缺失列再 `ALTER TABLE`，100% 保留极空间 NAS 上现有的 `data/news.db` 历史新闻与译文。
@@ -35,14 +36,17 @@ services:
     container_name: au-news-digest
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3800:3000"
     environment:
       - TZ=Australia/Sydney
       - DATABASE_PATH=/app/data/news.db
       - GEMINI_API_KEY=你的Gemini_Key
       - GEMINI_MODEL=gemini-flash-lite-latest
-      - MAX_ITEMS_PER_FEED=6
       - ACCESS_PASSWORD=可选的家庭访问口令（留空则免密）
+      - MAX_ITEMS_PER_FEED=10
+      - MAX_ITEMS_PER_GLOBAL_FEED=8
+      - MAX_DB_SIZE_GB=10
+      - CRON_SCHEDULE=0 */2 * * *
     volumes:
       - ./data:/app/data
 ```

@@ -1,4 +1,5 @@
 import {
+  countRecentUntranslatedArticles,
   enforceDatabaseSizeLimit,
   getExistingUrlStatus,
   getPendingUntranslatedArticles,
@@ -28,11 +29,19 @@ declare global {
 }
 
 const DEFAULT_MAX_ITEMS_PER_AU_FEED = 10;
-const DEFAULT_MAX_ITEMS_PER_GLOBAL_FEED = 12;
+const DEFAULT_MAX_ITEMS_PER_GLOBAL_FEED = 8;
 const DEFAULT_MAX_DB_SIZE_GB = 10;
 const BYTES_PER_GB = 1024 * 1024 * 1024;
 const EXTRACT_CONCURRENCY = 6;
-const TRANSLATE_BATCH_SIZE = 6;
+const TRANSLATE_BATCH_SIZE = 4;
+const TRANSLATE_BATCH_INTERVAL_MS = 1500;
+const AUTO_BACKFILL_MAX_ITEMS = 20;
+const AUTO_BACKFILL_WINDOW_HOURS = 24;
+const MAX_TRANSLATE_ATTEMPTS = 3;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const SOURCE_REGION_MAP = new Map(RSS_SOURCES.map((s) => [s.id, s.region]));
 
@@ -164,14 +173,25 @@ async function executeRefreshPipeline(reason: string): Promise<RefreshResult> {
       const existing = existingStatus.get(item.original_url);
       if (!existing) {
         toProcess.push(item);
-      } else if (hasGeminiKey && !existing.ai_translated) {
+      } else if (
+        hasGeminiKey &&
+        !existing.ai_translated &&
+        existing.translate_attempts < MAX_TRANSLATE_ATTEMPTS
+      ) {
         toProcess.push(item);
       } else {
         skipped++;
       }
     }
 
-    const pendingOlder = hasGeminiKey ? await getPendingUntranslatedArticles(60) : [];
+    // High-performance indexed backfill: ONLY scan last 24h untranslated articles with translate_attempts < 3 (max 20)
+    const pendingOlder = hasGeminiKey
+      ? await getPendingUntranslatedArticles(
+          AUTO_BACKFILL_MAX_ITEMS,
+          AUTO_BACKFILL_WINDOW_HOURS,
+          MAX_TRANSLATE_ATTEMPTS
+        )
+      : [];
     for (const pending of pendingOlder) {
       if (!toProcess.some((item) => item.original_url === pending.original_url)) {
         toProcess.push({
@@ -237,8 +257,11 @@ async function executeRefreshPipeline(reason: string): Promise<RefreshResult> {
       const exhaustedModels = new Set<string>();
       let processedCount = 0;
 
-      // Run batches sequentially so newly created lead topics in batch B immediately serve as cluster targets for batch B+1
+      // Run batches sequentially (max 4/batch, 1.5s interval) to avoid Gemini RPM spikes & keep cluster leads fresh
       for (let b = 0; b < batches.length; b++) {
+        if (b > 0 && hasGeminiKey) {
+          await sleep(TRANSLATE_BATCH_INTERVAL_MS);
+        }
         const batch = batches[b];
         setRefreshState({
           isRefreshing: true,
@@ -311,6 +334,7 @@ async function executeRefreshPipeline(reason: string): Promise<RefreshResult> {
               published_at: item.published_at,
               fetched_at: new Date().toISOString(),
               ai_translated: translated.ai_translated,
+              increment_translate_attempts: hasGeminiKey,
               cluster_id: resolvedClusterId,
             });
 
@@ -420,4 +444,155 @@ export async function refreshNews(reason = 'manual'): Promise<RefreshResult> {
   });
 
   return globalThis.__auNewsRefreshPromise;
+}
+
+export interface TranslateMissingResult {
+  ok: boolean;
+  windowHours: number;
+  scanned: number;
+  translated: number;
+  failed: number;
+  remaining: number;
+  batchesProcessed: number;
+  modelsUsed: string[];
+  message: string;
+}
+
+/**
+ * Manual backfill pipeline for `/api/translate-missing`:
+ * Translates recent untranslated articles (default last 24h, indexed lookup, max 4/batch with 1.5s interval).
+ */
+export async function translateMissingRecentArticles(options?: {
+  hours?: number;
+  limit?: number;
+  forceRetry?: boolean;
+}): Promise<TranslateMissingResult> {
+  const windowHours = Math.min(Math.max(options?.hours ?? AUTO_BACKFILL_WINDOW_HOURS, 1), 168);
+  const limit = Math.min(Math.max(options?.limit ?? 60, 1), 200);
+  const maxAttempts = options?.forceRetry ? 999 : MAX_TRANSLATE_ATTEMPTS;
+
+  if (!hasConfiguredGeminiKey()) {
+    return {
+      ok: false,
+      windowHours,
+      scanned: 0,
+      translated: 0,
+      failed: 0,
+      remaining: 0,
+      batchesProcessed: 0,
+      modelsUsed: [],
+      message: '未检测到有效的 GEMINI_API_KEY，无法执行漏翻补译',
+    };
+  }
+
+  const pending = await getPendingUntranslatedArticles(limit, windowHours, maxAttempts);
+  if (pending.length === 0) {
+    return {
+      ok: true,
+      windowHours,
+      scanned: 0,
+      translated: 0,
+      failed: 0,
+      remaining: 0,
+      batchesProcessed: 0,
+      modelsUsed: [],
+      message: `最近 ${windowHours} 小时内没有待补译的原文文章`,
+    };
+  }
+
+  // Enrich any pending item whose original_content was empty
+  const enriched = await mapWithConcurrency(pending, EXTRACT_CONCURRENCY, async (item) => {
+    if (item.original_content && item.original_content.length > 200) {
+      return { item, content: item.original_content, imageUrl: item.image_url };
+    }
+    const extracted = await fetchArticleFullText(item.original_url, item.original_excerpt);
+    return {
+      item,
+      content: extracted.content || item.original_content || item.original_excerpt,
+      imageUrl: extracted.imageUrl || item.image_url,
+    };
+  });
+
+  const recentLeads = await getRecentLeadArticles(24, 60);
+  const batches = chunkArray(enriched, TRANSLATE_BATCH_SIZE);
+  const exhaustedModels = new Set<string>();
+  const modelsUsedSet = new Set<string>();
+  let translated = 0;
+  let failed = 0;
+
+  for (let b = 0; b < batches.length; b++) {
+    if (b > 0) {
+      await sleep(TRANSLATE_BATCH_INTERVAL_MS);
+    }
+    const batch = batches[b];
+    const outputs = await translateArticlesBatch(
+      batch.map(({ item, content }) => ({
+        source_id: item.source_id,
+        source_name: item.source_name,
+        region: SOURCE_REGION_MAP.get(item.source_id) ?? 'global',
+        original_title: item.original_title,
+        original_excerpt: item.original_excerpt,
+        original_content: content,
+        rss_categories: [],
+      })),
+      recentLeads,
+      exhaustedModels
+    );
+
+    for (let i = 0; i < batch.length; i++) {
+      const { item, content, imageUrl } = batch[i];
+      const out = outputs[i];
+      if (out.model_used) modelsUsedSet.add(out.model_used);
+
+      await upsertArticle({
+        original_url: item.original_url,
+        source_id: item.source_id,
+        source_name: item.source_name,
+        original_title: item.original_title,
+        original_excerpt: item.original_excerpt,
+        original_content: content,
+        zh_title: out.zh_title,
+        zh_summary: out.zh_summary,
+        zh_key_points: out.zh_key_points,
+        zh_content: out.zh_content,
+        category: out.category,
+        image_url: imageUrl,
+        author: item.author,
+        published_at: item.published_at,
+        fetched_at: new Date().toISOString(),
+        ai_translated: out.ai_translated,
+        increment_translate_attempts: true,
+        cluster_id: out.matched_cluster_id ?? item.cluster_id,
+      });
+
+      if (out.ai_translated) {
+        translated++;
+      } else {
+        failed++;
+      }
+    }
+  }
+
+  const remaining = await countRecentUntranslatedArticles(windowHours, MAX_TRANSLATE_ATTEMPTS);
+  const modelsUsed = Array.from(modelsUsedSet);
+  const message =
+    failed === 0
+      ? `补译完成：最近 ${windowHours} 小时共扫描 ${pending.length} 篇，全部成功补译 ${translated} 篇`
+      : `补译结束：共扫描 ${pending.length} 篇，成功 ${translated} 篇，失败 ${failed} 篇（剩余待补译 ${remaining} 篇）`;
+
+  console.log(
+    `[TranslateMissing] ${message} | batches=${batches.length}, models=${modelsUsed.join(', ')}`
+  );
+
+  return {
+    ok: failed === 0 || translated > 0,
+    windowHours,
+    scanned: pending.length,
+    translated,
+    failed,
+    remaining,
+    batchesProcessed: batches.length,
+    modelsUsed,
+    message,
+  };
 }
